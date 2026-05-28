@@ -48,6 +48,19 @@ inline float computeConsumedGrams(float initialWeightGrams, float currentWeightG
   return consumed > 0.0f ? consumed : 0.0f;
 }
 
+inline float computeProbeMillivoltsFromAdsInput(float adsInputMillivolts) {
+  constexpr float frontEndGain = 3.0f;
+  constexpr float frontEndOffsetMillivolts = 1500.0f;
+  constexpr float probeZeroMillivolts = 5547.0f;
+  return (adsInputMillivolts * frontEndGain) + frontEndOffsetMillivolts - probeZeroMillivolts;
+}
+
+inline float computePhFromProbeMillivolts(float probeMillivolts) {
+  constexpr float neutralPh = 7.0f;
+  constexpr float millivoltsPerPh = 58.0f / 1.11f;
+  return neutralPh - (probeMillivolts / millivoltsPerPh);
+}
+
 inline uint16_t pulseForError(float errorMagnitude) {
   if (errorMagnitude > 0.70f) {
     return 900;

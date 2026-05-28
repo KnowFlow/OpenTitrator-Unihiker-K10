@@ -4,13 +4,11 @@
 #include <WebServer.h>
 #include <ArduinoOTA.h>
 #include <Preferences.h>
-#include <DFRobot_PH.h>
 #include <ESP32Servo.h>
 #include "unihiker_k10.h"
 #include "control_logic.h"
 
 UNIHIKER_K10 k10;
-DFRobot_PH phConverter;
 Servo pumpServo;
 WebServer server(80);
 Preferences preferences;
@@ -99,8 +97,8 @@ public:
 
     reading.raw = raw;
     reading.adcOk = true;
-    reading.millivolts = (raw * 0.125f) * 3.0f + 1500.0f;
-    reading.ph = smoothPh(phConverter.readPH(reading.millivolts, DEFAULT_TEMPERATURE_C));
+    reading.millivolts = computeProbeMillivoltsFromAdsInput(raw * 0.125f);
+    reading.ph = smoothPh(computePhFromProbeMillivolts(reading.millivolts));
     reading.ok = isValidPh(reading.ph);
     return reading;
   }
@@ -1019,7 +1017,6 @@ void setup() {
   Wire.begin();
 
   pump.begin();
-  phConverter.begin();
 
   phReady = phSensor.begin();
   scaleReady = scaleSensor.begin();
