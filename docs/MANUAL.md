@@ -140,6 +140,10 @@ Connect any phone or laptop to this AP and open the IP shown on screen (usually 
                                             Done
 ```
 
+![Titration curve](../titration_curve.png)
+
+The S-shaped titration curve shows why pulse dosing is essential: near the equivalence point the slope is extremely steep. A continuous pump would overshoot the target. The controller detects this region via `dpH/dt` and uses micro-pulses with extended settle times.
+
 1. **SetupMode** — choose acid or base titration.
 2. **SetupTarget** — set the desired endpoint pH.
 3. **SetupReady** — calibrate pumps (recommended) and tare the scale.

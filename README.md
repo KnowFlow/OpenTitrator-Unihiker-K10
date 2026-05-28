@@ -35,6 +35,10 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           Scale (0x64)
 ### Adaptive Pure-Pulse Titration
 Instead of continuous PWM, the controller doses the titrant in **timed pulses** whose length and settle time adapt to how far the current pH is from the target:
 
+![Titration curve](titration_curve.png)
+
+The S-shaped curve above illustrates why pulse dosing works: near the steep equivalence point, even a small dose causes a large pH jump. The controller detects this via `dpH/dt` and switches to micro-pulses with longer settle times.
+
 | Zone | pH error | Pulse | Settle | Purpose |
 |------|----------|-------|--------|---------|
 | Steep | `|dpH/dt| > 0.08` | 30 ms | 8 s | Near equivalence point, prevent overshoot |
