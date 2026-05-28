@@ -99,7 +99,7 @@ public:
 
     reading.raw = raw;
     reading.adcOk = true;
-    reading.millivolts = raw * 0.125f;
+    reading.millivolts = (raw * 0.125f) * 3.0f + 1500.0f;
     reading.ph = smoothPh(phConverter.readPH(reading.millivolts, DEFAULT_TEMPERATURE_C));
     reading.ok = isValidPh(reading.ph);
     return reading;
