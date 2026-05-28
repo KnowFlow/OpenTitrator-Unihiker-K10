@@ -1,5 +1,7 @@
 # K10 pH 滴定仪
 
+[English](README.md) · [使用说明书](docs/MANUAL_CN.md) · [User Manual](docs/MANUAL.md)
+
 基于 **UNIHIKER K10**（ESP32-S3）的独立 pH 滴定控制器。采用自适应纯脉冲加药策略，配合双路蠕动泵、ADS1115 pH 探头和 I2C 电子秤，实现全自动酸碱滴定。
 
 ---
