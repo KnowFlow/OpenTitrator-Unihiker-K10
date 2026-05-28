@@ -38,6 +38,13 @@ struct TitrationSettings {
   float titrantMolarity = 0.01f;
 };
 
+struct TitrationDecision {
+  TitrationAction action = TitrationAction::Done;
+  TitrationStopReason reason = TitrationStopReason::None;
+  uint16_t pumpPulseMs = 0;
+  uint16_t settleMs = 3500;
+};
+
 struct PhFilter {
   static constexpr uint8_t Window = 7;
   int16_t values[Window] = {};
@@ -87,15 +94,55 @@ struct PhFilter {
   }
 };
 
-struct PumpControlState {
-  float integral = 0.0f;
-};
+inline float absoluteFloat(float value);
 
-struct PumpControlDecision {
-  TitrationAction action = TitrationAction::Done;
-  TitrationStopReason reason = TitrationStopReason::None;
-  uint8_t pwm = 0;
-  bool finePulse = false;
+struct TitrationDynamics {
+  static constexpr uint8_t N = 5;
+  float ph[N] = {};
+  uint32_t t_ms[N] = {};
+  uint8_t count = 0;
+  uint8_t idx = 0;
+
+  void reset() {
+    count = 0;
+    idx = 0;
+  }
+
+  void add(float phValue, uint32_t ms) {
+    ph[idx] = phValue;
+    t_ms[idx] = ms;
+    idx = (idx + 1) % N;
+    if (count < N) {
+      count++;
+    }
+  }
+
+  float dpH_dt() const {
+    if (count < 2) {
+      return 0.0f;
+    }
+    uint8_t i = (idx + N - 1) % N;
+    uint8_t j = (idx + N - 2) % N;
+    float dt = (t_ms[i] - t_ms[j]) / 1000.0f;
+    return dt > 0.001f ? (ph[i] - ph[j]) / dt : 0.0f;
+  }
+
+  bool isSteep() const {
+    return absoluteFloat(dpH_dt()) > 0.08f;
+  }
+
+  bool isOvershooting(TitrationMode mode, float target) const {
+    if (count < 2) {
+      return false;
+    }
+    float d = dpH_dt();
+    uint8_t i = (idx + N - 1) % N;
+    if (mode == TitrationMode::AddBase) {
+      return ph[i] > target + 0.02f && d > 0.0f;
+    } else {
+      return ph[i] < target - 0.02f && d < 0.0f;
+    }
+  }
 };
 
 inline float absoluteFloat(float value) {
@@ -177,16 +224,6 @@ inline float clampFloat(float value, float low, float high) {
   return value;
 }
 
-inline uint8_t clampPwm(float value) {
-  if (value <= 0.0f) {
-    return 0;
-  }
-  if (value >= 255.0f) {
-    return 255;
-  }
-  return (uint8_t)(value + 0.5f);
-}
-
 inline bool isSensorFaultRaw10Bit(int rawValue) {
   return rawValue == 0 || rawValue == 1023;
 }
@@ -202,68 +239,65 @@ inline int adsRawToAnalog10Bit(int16_t adsRaw) {
   return scaled;
 }
 
-inline PumpControlDecision computePumpControl(
+inline TitrationDecision decideAdaptiveDose(
     const TitrationSettings &settings,
     float currentPh,
     float consumedGrams,
-    float dtSeconds,
-    PumpControlState &control) {
-  constexpr float deadbandPh = 0.08f;
-  constexpr float fineThresholdPh = 0.30f;
-  constexpr float fastThresholdPh = 1.00f;
-  constexpr float kp = 8.0f;
-  constexpr float ki = 0.8f;
-  constexpr float integralMax = 40.0f;
+    const TitrationDynamics &dyn) {
+  TitrationDecision d;
 
-  PumpControlDecision decision;
   if (!isValidPh(currentPh)) {
-    decision.action = TitrationAction::Error;
-    decision.reason = TitrationStopReason::InvalidReading;
-    return decision;
+    d.action = TitrationAction::Error;
+    d.reason = TitrationStopReason::InvalidReading;
+    return d;
   }
 
   if (consumedGrams >= settings.maxConsumedGrams) {
-    decision.action = TitrationAction::Error;
-    decision.reason = TitrationStopReason::MassLimit;
-    return decision;
-  }
-
-  const float error = currentPh - settings.targetPh;
-  const float magnitude = absoluteFloat(error);
-  if (magnitude <= deadbandPh) {
-    decision.action = TitrationAction::Done;
-    decision.reason = TitrationStopReason::TargetReached;
-    return decision;
+    d.action = TitrationAction::Error;
+    d.reason = TitrationStopReason::MassLimit;
+    return d;
   }
 
   const bool shouldAddBase = settings.mode == TitrationMode::AddBase && currentPh < settings.targetPh;
   const bool shouldAddAcid = settings.mode == TitrationMode::AddAcid && currentPh > settings.targetPh;
   if (!shouldAddBase && !shouldAddAcid) {
-    decision.action = TitrationAction::Done;
-    decision.reason = TitrationStopReason::TargetReached;
-    return decision;
+    d.action = TitrationAction::Done;
+    d.reason = TitrationStopReason::TargetReached;
+    return d;
   }
 
-  float basePwm = 25.0f;
-  float piOutput = 0.0f;
-  decision.finePulse = true;
-  if (magnitude > fastThresholdPh) {
-    basePwm = 255.0f;
-    decision.finePulse = false;
-    control.integral *= 0.5f;
-  } else if (magnitude > fineThresholdPh) {
-    basePwm = 55.0f;
-    decision.finePulse = false;
-    control.integral += magnitude * dtSeconds;
-    control.integral = clampFloat(control.integral, -integralMax, integralMax);
-    piOutput = (kp * magnitude) + (ki * control.integral);
+  if (dyn.isOvershooting(settings.mode, settings.targetPh)) {
+    d.action = TitrationAction::Done;
+    d.reason = TitrationStopReason::TargetReached;
+    return d;
+  }
+
+  const float error = absoluteFloat(currentPh - settings.targetPh);
+  if (error <= 0.05f) {
+    d.action = TitrationAction::Done;
+    d.reason = TitrationStopReason::TargetReached;
+    return d;
+  }
+
+  const bool steep = dyn.isSteep();
+  if (steep) {
+    d.action = TitrationAction::Dose;
+    d.pumpPulseMs = 30;
+    d.settleMs = 8000;
+  } else if (error > 1.0f) {
+    d.action = TitrationAction::Dose;
+    d.pumpPulseMs = 600;
+    d.settleMs = 2000;
+  } else if (error > 0.3f) {
+    d.action = TitrationAction::Dose;
+    d.pumpPulseMs = 200;
+    d.settleMs = 3500;
   } else {
-    control.integral *= 0.5f;
+    d.action = TitrationAction::Dose;
+    d.pumpPulseMs = 80;
+    d.settleMs = 5000;
   }
-
-  decision.action = TitrationAction::Dose;
-  decision.pwm = clampPwm(basePwm + piOutput);
-  return decision;
+  return d;
 }
 
 #endif

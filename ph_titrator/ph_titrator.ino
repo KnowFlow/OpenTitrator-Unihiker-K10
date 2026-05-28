@@ -57,6 +57,7 @@ enum class RunState : uint8_t {
   SetupMode,
   SetupTarget,
   SetupReady,
+  Calibrating,
   SampleFilling,
   FilterWarmup,
   Running,
@@ -320,76 +321,44 @@ public:
   }
 
   void stop() {
-    commandPwmValue = 0;
-    finePulseMode = false;
+    runUntilMs = 0;
     writeStop();
   }
 
-  void setCommand(uint8_t pwm, bool finePulse) {
-    if (commandPwmValue == pwm && finePulseMode == finePulse) {
-      return;
-    }
-    commandPwmValue = pwm;
-    finePulseMode = finePulse;
-    cycleStartedMs = millis();
-    update();
-  }
-
-  void update() {
-    if (commandPwmValue == 0) {
-      writeStop();
-      return;
-    }
-
-    if (commandPwmValue >= 255) {
-      writeRun();
-      return;
-    }
-
-    uint32_t elapsed = (millis() - cycleStartedMs) % PUMP_DUTY_CYCLE_MS;
-    uint32_t runMs = finePulseMode ? FINE_PULSE_RUN_MS : ((uint32_t)commandPwmValue * PUMP_DUTY_CYCLE_MS) / 255U;
-    if (elapsed < runMs) {
-      writeRun();
-    } else {
-      writeStop();
-    }
+  void runForMs(uint16_t ms) {
+    runUntilMs = millis() + ms;
+    writeRun();
   }
 
   void runContinuous() {
-    setCommand(255, false);
+    runUntilMs = millis() + 30000; // 30s max safety
+    writeRun();
   }
 
-  uint8_t commandPwm() const {
-    return commandPwmValue;
+  void update() {
+    if (runUntilMs > 0 && millis() >= runUntilMs) {
+      stop();
+    }
   }
 
-  bool isCommanded() const {
-    return commandPwmValue > 0;
-  }
-
-  bool isOutputRunning() const {
-    return running;
+  bool isRunning() const {
+    return runUntilMs > 0 && millis() < runUntilMs;
   }
 
 private:
   Servo *servo = nullptr;
-  uint8_t commandPwmValue = 0;
-  bool finePulseMode = false;
-  uint32_t cycleStartedMs = 0;
-  bool running = false;
+  uint32_t runUntilMs = 0;
 
   void writeStop() {
     if (servo != nullptr) {
       servo->writeMicroseconds(PUMP_STOP_US);
     }
-    running = false;
   }
 
   void writeRun() {
     if (servo != nullptr) {
       servo->writeMicroseconds(PUMP_DOSE_US);
     }
-    running = true;
   }
 };
 
@@ -406,7 +375,9 @@ TitrationStopReason stopReason = TitrationStopReason::None;
 PhReading lastPh;
 ScaleReading lastScale;
 PhFilter phFilter;
-PumpControlState pumpControlState;
+TitrationDynamics phDynamics;
+float titrantPumpFlowRateGps = 0.0f;
+float samplePumpFlowRateGps = 0.0f;
 float initialBottleWeight = 0.0f;
 float sampleStartWeight = 0.0f;
 float sampleDeliveredGrams = 0.0f;
@@ -477,6 +448,7 @@ String stateLabel() {
     case RunState::Dosing: return "DOSE";
     case RunState::Settling: return "WAIT";
     case RunState::Paused: return "PAUSE";
+    case RunState::Calibrating: return "CALIB";
     case RunState::Done: return "DONE";
     case RunState::Error: return "ERROR";
   }
@@ -508,7 +480,7 @@ void resetRunData() {
   pump.stop();
   samplePump.stop();
   phFilter.reset();
-  pumpControlState.integral = 0.0f;
+  phDynamics.reset();
   sensorFaultCount = 0;
   sensorFault = false;
   sampleStartWeight = scaleReady ? lastScale.grams : 0.0f;
@@ -534,7 +506,7 @@ bool startTitration() {
   pump.stop();
   samplePump.runContinuous();
   phFilter.reset();
-  pumpControlState.integral = 0.0f;
+  phDynamics.reset();
   sensorFaultCount = 0;
   sensorFault = false;
   sampleStartWeight = lastScale.grams;
@@ -603,6 +575,8 @@ uint32_t stateColor() {
       return COLOR_WARN;
     case RunState::Done:
       return COLOR_OK;
+    case RunState::Calibrating:
+      return COLOR_WARN;
     case RunState::Error:
       return COLOR_ERROR;
     default:
@@ -621,6 +595,7 @@ String primaryHint() {
     case RunState::Dosing:
     case RunState::Settling: return "AB STOP";
     case RunState::Paused: return "AB RESUME";
+    case RunState::Calibrating: return "AB CANCEL";
     case RunState::Done:
     case RunState::Error: return "AB RESET";
   }
@@ -640,6 +615,8 @@ String secondaryHint() {
     case RunState::Settling:
     case RunState::Paused:
       return "HOLD AB PANIC";
+    case RunState::Calibrating:
+      return "Place bottle";
     case RunState::Done:
     case RunState::Error:
       return statusLine;
@@ -727,9 +704,17 @@ void handleButton(ButtonEvent event) {
     case RunState::SetupReady:
       if (event == ButtonEvent::A) {
         tareScale();
+      } else if (event == ButtonEvent::B) {
+        setState(RunState::Calibrating, "Calibrating pumps");
       } else if (event == ButtonEvent::ABShort) {
         startTitration();
       }
+      break;
+
+    case RunState::Calibrating:
+      pump.stop();
+      samplePump.stop();
+      setState(RunState::SetupReady, "Calib cancelled");
       break;
 
     case RunState::Paused:
@@ -795,6 +780,9 @@ void sampleSensors() {
       lastPh.ok = isValidPh(lastPh.ph);
       phReady = lastPh.ok && !sensorFault;
       phSampleFresh = phReady;
+      if (phReady) {
+        phDynamics.add(lastPh.ph, millis());
+      }
     } else {
       phReady = false;
     }
@@ -889,17 +877,19 @@ void runController() {
     return;
   }
 
-  PumpControlDecision decision = computePumpControl(settings, lastPh.ph, consumedGrams, SAMPLE_INTERVAL_MS / 1000.0f, pumpControlState);
+  TitrationDecision decision = decideAdaptiveDose(
+      settings, lastPh.ph, consumedGrams, phDynamics);
+
   if (decision.action == TitrationAction::Dose) {
-    activePulseMs = 0;
-    activeSettleMs = SETTLING_TIME_MS;
-    pump.setCommand(decision.pwm, decision.finePulse);
-    setState(RunState::Dosing, String("PWM ") + String(decision.pwm));
+    activePulseMs = decision.pumpPulseMs;
+    activeSettleMs = decision.settleMs;
+    pump.runForMs(decision.pumpPulseMs);
+    setState(RunState::Dosing, String("Pulse ") + String(decision.pumpPulseMs) + "ms");
   } else if (decision.action == TitrationAction::Done) {
-    bool wasCommanded = pump.isCommanded();
+    bool wasRunning = pump.isRunning();
     pump.stop();
     stopReason = decision.reason;
-    if (wasCommanded) {
+    if (wasRunning) {
       setState(RunState::Settling, "Settling");
     } else {
       resultConcentrationM = computeSampleConcentrationMolar(activeTitrantMolarity(), consumedGrams, settings.sampleGrams);
@@ -1000,7 +990,7 @@ String htmlPage() {
   page += F("</b><div id='status' class='sub'>");
   page += htmlEscape(statusLine);
   page += F("</div><div>Pump: <span id='pump'>");
-  page += pump.isCommanded() ? F("<span class='warn'>ON</span>") : F("<span class='ok'>STOP</span>");
+  page += pump.isRunning() ? F("<span class='warn'>ON</span>") : F("<span class='ok'>STOP</span>");
   page += F("</span></div></div></section>");
 
   page += F("<section class='grid'><div class='card'><div class='k'>Target</div><div id='target' class='v'>");
@@ -1205,9 +1195,9 @@ void handleJson() {
   json += ",\"mode\":\"" + modeLabel() + "\"";
   json += ",\"state\":\"" + stateLabel() + "\"";
   json += ",\"status\":\"" + jsonEscape(statusLine) + "\"";
-  json += ",\"pump\":" + String(pump.isCommanded() ? "true" : "false");
-  json += ",\"pump_pwm\":" + String(pump.commandPwm());
-  json += ",\"sample_pump\":" + String(samplePump.isCommanded() ? "true" : "false");
+  json += ",\"pump\":" + String(pump.isRunning() ? "true" : "false");
+  json += ",\"pump_pulse_ms\":" + String(pump.isRunning() ? 1 : 0);
+  json += ",\"sample_pump\":" + String(samplePump.isRunning() ? "true" : "false");
   json += ",\"filter_ready\":" + String(phFilter.ready() ? "true" : "false");
   json += ",\"sensor_fault\":" + String(sensorFault ? "true" : "false");
   json += ",\"network\":\"" + jsonEscape(networkLabel) + "\"";
@@ -1339,6 +1329,73 @@ void updateNetworkStatus() {
   }
 }
 
+void runCalibration() {
+  static uint32_t calStartMs = 0;
+  static int calPhase = 0;
+  static float calInitialWeight = 0.0f;
+
+  if (calPhase == 0) {
+    calPhase = 1;
+    calStartMs = millis();
+    calInitialWeight = lastScale.grams;
+    pump.stop();
+    samplePump.stop();
+    statusLine = "Calib: place bottle + tare";
+    displayDirty = true;
+    return;
+  }
+
+  uint32_t elapsed = millis() - calStartMs;
+
+  if (calPhase == 1 && elapsed >= 2000) {
+    pump.runForMs(2000);
+    calPhase = 2;
+    statusLine = "Calib: titrant 2s";
+    displayDirty = true;
+    return;
+  }
+
+  if (calPhase == 2 && !pump.isRunning() && elapsed >= 6000) {
+    float delta = lastScale.grams - calInitialWeight;
+    titrantPumpFlowRateGps = delta / 2.0f;
+    calInitialWeight = lastScale.grams;
+    samplePump.runForMs(2000);
+    calPhase = 3;
+    statusLine = "Calib: sample 2s";
+    displayDirty = true;
+    return;
+  }
+
+  if (calPhase == 3 && !samplePump.isRunning() && elapsed >= 10000) {
+    float delta = lastScale.grams - calInitialWeight;
+    samplePumpFlowRateGps = delta / 2.0f;
+    saveCalibration();
+    calPhase = 0;
+    setState(RunState::SetupReady, "Calibration done");
+    statusLine = "Calib finished";
+    displayDirty = true;
+    return;
+  }
+}
+
+void saveCalibration() {
+  Preferences prefs;
+  if (prefs.begin("cal", false)) {
+    prefs.putFloat("titrant_gps", titrantPumpFlowRateGps);
+    prefs.putFloat("sample_gps", samplePumpFlowRateGps);
+    prefs.end();
+  }
+}
+
+void loadCalibration() {
+  Preferences prefs;
+  if (prefs.begin("cal", true)) {
+    titrantPumpFlowRateGps = prefs.getFloat("titrant_gps", 0.0f);
+    samplePumpFlowRateGps = prefs.getFloat("sample_gps", 0.0f);
+    prefs.end();
+  }
+}
+
 void drawDisplay() {
   if (!displayDirty) {
     return;
@@ -1375,8 +1432,8 @@ void drawDisplay() {
   snprintf(line, sizeof(line), "%s %s", staIpAddress != "0.0.0.0" ? "STA" : "AP", ipAddress.c_str());
   k10.canvas->canvasText(line, 9, COLOR_WARN);
 
-  snprintf(line, sizeof(line), "P0 %u P1 %.1f/%.1f", pump.commandPwm(), sampleDeliveredGrams, settings.sampleGrams);
-  k10.canvas->canvasText(line, 11, pump.isCommanded() || samplePump.isCommanded() ? COLOR_WARN : COLOR_MUTED);
+  snprintf(line, sizeof(line), "PULSE %s  S %.1f/%.1f", pump.isRunning() ? "ON" : "off", sampleDeliveredGrams, settings.sampleGrams);
+  k10.canvas->canvasText(line, 11, pump.isRunning() || samplePump.isRunning() ? COLOR_WARN : COLOR_MUTED);
 
   snprintf(line, sizeof(line), "RESULT %.5fM", resultConcentrationM);
   k10.canvas->canvasText(line, 12, resultConcentrationM > 0.0f ? COLOR_OK : COLOR_MUTED);
@@ -1404,6 +1461,8 @@ void setup() {
   phReady = phSensor.begin();
   scaleReady = scaleSensor.begin();
 
+  loadCalibration();
+
   if (!phReady || !scaleReady) {
     stopReason = TitrationStopReason::InvalidReading;
     setState(RunState::Error, "Check I2C");
@@ -1430,6 +1489,10 @@ void loop() {
   }
   handleButton(readButtons());
   sampleSensors();
-  runController();
+  if (state == RunState::Calibrating) {
+    runCalibration();
+  } else {
+    runController();
+  }
   drawDisplay();
 }
