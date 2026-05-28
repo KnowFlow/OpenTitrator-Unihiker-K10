@@ -66,8 +66,40 @@ int main() {
 
   expectNear(computeConsumedGrams(312.5f, 300.0f), 12.5f, 0.001f, "consumed grams from bottle weight loss");
   expectNear(computeConsumedGrams(312.5f, 313.2f), 0.0f, 0.001f, "negative consumption is clamped");
-  expectNear(computeProbeMillivoltsFromAdsInput(1329.3334f), -59.0f, 0.1f, "ADS input maps to probe millivolts");
+  expectNear(computeSampleGainGrams(100.0f, 120.0f), 20.0f, 0.001f, "sample delivery uses reactor weight gain");
+  expectNear(computeSampleGainGrams(120.0f, 100.0f), 0.0f, 0.001f, "sample delivery ignores weight loss");
+  expectNear(titrantMolarityForPreset(TitrantPreset::Naoh001, 0.2f), 0.01f, 0.001f, "NaOH preset uses 0.01 mol/L");
+  expectNear(titrantMolarityForPreset(TitrantPreset::Manual, 0.05f), 0.05f, 0.001f, "manual titrant molarity is used");
+  expectNear(computeSampleConcentrationMolar(0.01f, 4.0f, 40.0f), 0.001f, 0.000001f, "sample concentration uses titrant molarity and mass ratio");
+  expectNear(computeProbeMillivoltsFromAdsInput(1329.3334f), -59.0f, 0.1f, "alkaline calibration maps ADS input to probe millivolts");
+  expectNear(computeProbeMillivoltsFromAdsInput(2387.3333f), 296.0f, 0.1f, "acid calibration maps ADS input to probe millivolts");
   expectNear(computePhFromProbeMillivolts(-58.0f), 8.11f, 0.01f, "probe millivolts maps to calibrated pH");
+  expectNear(computePhFromProbeMillivolts(296.0f), 2.14f, 0.01f, "acid probe millivolts maps to calibrated pH");
+
+  PhFilter filter;
+  int16_t rawSamples[] = {100, 102, 98, 250, 101, 0, 99};
+  for (int16_t raw : rawSamples) {
+    filter.add(raw);
+  }
+  expectTrue(filter.ready(), "filter is ready after window fills");
+  expectNear(filter.filteredRaw(), 100.0f, 0.001f, "filter trims outliers and averages middle samples");
+
+  PumpControlState control;
+  PumpControlDecision fastDose = computePumpControl(settings, 5.80f, 12.0f, 2.0f, control);
+  expectTrue(fastDose.action == TitrationAction::Dose, "pump controller doses outside target");
+  expectEqual(fastDose.pwm, 255, "large pH error uses full pump command");
+
+  PumpControlDecision mediumDose = computePumpControl(settings, 6.55f, 12.0f, 2.0f, control);
+  expectTrue(mediumDose.action == TitrationAction::Dose, "medium pH error still doses");
+  expectTrue(mediumDose.pwm > 0 && mediumDose.pwm < 120, "medium pH error uses reduced pump command");
+
+  PumpControlDecision precontrolDose = computePumpControl(settings, 6.82f, 12.0f, 2.0f, control);
+  expectTrue(precontrolDose.action == TitrationAction::Dose, "precontrol pH error still doses");
+  expectTrue(precontrolDose.finePulse, "precontrol pH error uses intermittent fine pulse");
+
+  PumpControlDecision deadbandStop = computePumpControl(settings, 6.95f, 12.0f, 2.0f, control);
+  expectTrue(deadbandStop.action == TitrationAction::Done, "pump controller stops in deadband");
+  expectEqual(deadbandStop.pwm, 0, "deadband uses zero pump command");
 
   if (failures != 0) {
     return 1;
