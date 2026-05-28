@@ -20,6 +20,13 @@ const uint8_t ADS1115_ADDR = 0x49;
 const uint8_t SCALE_ADDR = 0x64;
 const uint8_t PH_ADC_CHANNEL = 0;
 const float DEFAULT_TEMPERATURE_C = 25.0f;
+const uint32_t ADC_CONVERSION_MS = 12;
+const uint32_t SCALE_SETTLE_MS = 60;
+const uint32_t I2C_READ_MS = 22;
+const uint32_t BUTTON_LONG_PRESS_MS = 1200;
+const uint32_t WIFI_CONNECT_TIMEOUT_MS = 8000;
+const uint32_t WIFI_RETRY_INTERVAL_MS = 10000;
+const uint32_t RESTART_DELAY_MS = 1200;
 
 const int PUMP_PIN = P0;
 const int PUMP_STOP_US = 1500;
@@ -74,6 +81,9 @@ struct ScaleReading {
 
 bool devicePresent(uint8_t address);
 
+extern bool otaReady;
+extern bool webReady;
+
 class Ads1115PhSensor {
 public:
   bool begin() {
@@ -115,7 +125,11 @@ private:
       return INT16_MIN;
     }
 
-    delay(12);
+    uint32_t adcWait = millis();
+    while (millis() - adcWait < ADC_CONVERSION_MS) {
+      if (otaReady) ArduinoOTA.handle();
+      if (webReady) server.handleClient();
+    }
     Wire.beginTransmission(ADS1115_ADDR);
     Wire.write(0x00);
     if (Wire.endTransmission() != 0) {
@@ -155,7 +169,11 @@ public:
       return false;
     }
 
-    delay(60);
+    uint32_t scaleWait = millis();
+    while (millis() - scaleWait < SCALE_SETTLE_MS) {
+      if (otaReady) ArduinoOTA.handle();
+      if (webReady) server.handleClient();
+    }
     offset = averageRaw(8);
     if (offset == 0) {
       return false;
@@ -257,7 +275,10 @@ private:
       return false;
     }
 
-    delay(22);
+    uint32_t i2cWait = millis();
+    while (millis() - i2cWait < I2C_READ_MS) {
+      if (otaReady) ArduinoOTA.handle();
+    }
     if (Wire.requestFrom((int)SCALE_ADDR, (int)size) != (int)size) {
       return false;
     }
@@ -355,20 +376,6 @@ const char *modeText() {
 }
 
 String stateLabel() {
-  switch (state) {
-    case RunState::SetupMode: return "MODE";
-    case RunState::SetupTarget: return "TARGET";
-    case RunState::SetupReady: return "READY";
-    case RunState::Running: return "RUN";
-    case RunState::Dosing: return "DOSE";
-    case RunState::Settling: return "WAIT";
-    case RunState::Done: return "DONE";
-    case RunState::Error: return "ERROR";
-  }
-  return "?";
-}
-
-const char *stateTextShort() {
   switch (state) {
     case RunState::SetupMode: return "MODE";
     case RunState::SetupTarget: return "TARGET";
@@ -485,7 +492,7 @@ ButtonEvent readButtons() {
     abPressedAt = millis();
     longSent = false;
   }
-  if (ab && !longSent && millis() - abPressedAt > 1200) {
+  if (ab && !longSent && millis() - abPressedAt > BUTTON_LONG_PRESS_MS) {
     longSent = true;
     wasAB = ab;
     wasA = a;
@@ -662,7 +669,7 @@ void saveWifiSettings(const String &ssid, const String &password) {
 void scheduleRestart(const String &message) {
   statusLine = message;
   restartPending = true;
-  restartAtMs = millis() + 1200;
+  restartAtMs = millis();
   displayDirty = true;
 }
 
@@ -883,8 +890,12 @@ void startNetwork() {
   if (wifiSsid.length() > 0) {
     WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
     uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) {
-      delay(250);
+    while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+      uint32_t wifiSpin = millis();
+      while (millis() - wifiSpin < 250) {
+        if (otaReady) ArduinoOTA.handle();
+        if (webReady) server.handleClient();
+      }
     }
     if (WiFi.status() == WL_CONNECTED) {
       staIpAddress = WiFi.localIP().toString();
@@ -940,7 +951,7 @@ void updateNetworkStatus() {
     staIpAddress = "0.0.0.0";
     ipAddress = apIpAddress;
     networkLabel = String("AP ") + AP_SSID;
-    if (wifiSsid.length() > 0 && millis() - lastReconnectMs > 10000) {
+    if (wifiSsid.length() > 0 && millis() - lastReconnectMs > WIFI_RETRY_INTERVAL_MS) {
       lastReconnectMs = millis();
       WiFi.reconnect();
     }
@@ -948,53 +959,6 @@ void updateNetworkStatus() {
 
   if (oldIp != ipAddress || oldStaIp != staIpAddress || oldLabel != networkLabel) {
     displayDirty = true;
-  }
-}
-
-void drawLabelValue(const String &label, const String &value, int x, int y, uint32_t valueColor = COLOR_TEXT) {
-  k10.canvas->canvasText(label, x, y, COLOR_MUTED, k10.canvas->eCNAndENFont16, 50, false);
-  k10.canvas->canvasText(value, x, y + 18, valueColor, k10.canvas->eCNAndENFont16, 50, false);
-}
-
-void drawProgressBar(int x, int y, int w, int h, float value, float maxValue, uint32_t fillColor) {
-  float ratio = maxValue <= 0.0f ? 0.0f : value / maxValue;
-  ratio = constrain(ratio, 0.0f, 1.0f);
-  int fillW = (int)(w * ratio);
-  k10.canvas->canvasLine(x, y, x + w, y, COLOR_LINE);
-  k10.canvas->canvasLine(x, y + 1, x + fillW, y + 1, fillColor);
-}
-
-void drawHeader() {
-  k10.canvas->canvasText(modeLabel(), 8, 8, COLOR_TEXT, k10.canvas->eCNAndENFont16, 50, false);
-  k10.canvas->canvasText(stateLabel(), 78, 8, stateColor(), k10.canvas->eCNAndENFont16, 50, false);
-  k10.canvas->canvasText(pump.isRunning() ? "PUMP" : "STOP", 176, 8, pump.isRunning() ? COLOR_WARN : COLOR_MUTED, k10.canvas->eCNAndENFont16, 50, false);
-  k10.canvas->canvasLine(0, 34, 239, 34, COLOR_LINE);
-}
-
-void drawPhCard() {
-  uint32_t phColor = phReady ? COLOR_OK : COLOR_WARN;
-  k10.canvas->canvasText("pH", 14, 52, COLOR_MUTED, k10.canvas->eCNAndENFont16, 50, false);
-  k10.canvas->canvasText(phReady ? String(lastPh.ph, 2) : String("--.--"), 50, 68, phColor, k10.canvas->eCNAndENFont24, 50, false);
-  k10.canvas->canvasLine(8, 126, 232, 126, COLOR_LINE);
-  k10.canvas->canvasText("TGT", 14, 138, COLOR_MUTED, k10.canvas->eCNAndENFont16, 50, false);
-  k10.canvas->canvasText(String(settings.targetPh, 2), 58, 138, COLOR_TEXT, k10.canvas->eCNAndENFont16, 50, false);
-  k10.canvas->canvasText(phReady ? String(lastPh.millivolts, 0) + "mV" : String("NO ADC"), 142, 138, COLOR_MUTED, k10.canvas->eCNAndENFont16, 50, false);
-}
-
-void drawBottleCard() {
-  uint32_t usedColor = consumedGrams >= settings.maxConsumedGrams ? COLOR_ERROR : COLOR_OK;
-  k10.canvas->canvasLine(8, 170, 232, 170, COLOR_LINE);
-  drawLabelValue("USED", String(consumedGrams, 1) + "g", 14, 182, usedColor);
-  drawLabelValue("BOTTLE", scaleReady ? String(lastScale.grams, 1) + "g" : String("--"), 128, 182, scaleReady ? COLOR_TEXT : COLOR_WARN);
-  drawProgressBar(14, 230, 212, 2, consumedGrams, settings.maxConsumedGrams, usedColor);
-}
-
-void drawFooter() {
-  k10.canvas->canvasLine(0, 250, 239, 250, COLOR_LINE);
-  k10.canvas->canvasText(primaryHint(), 12, 262, COLOR_WARN, k10.canvas->eCNAndENFont16, 50, false);
-  k10.canvas->canvasText(secondaryHint(), 12, 286, COLOR_MUTED, k10.canvas->eCNAndENFont16, 50, false);
-  if (state == RunState::Error) {
-    k10.canvas->canvasText(reasonLabel(stopReason), 126, 286, COLOR_ERROR, k10.canvas->eCNAndENFont16, 50, false);
   }
 }
 
@@ -1006,39 +970,39 @@ void drawDisplay() {
 
   char line[48];
 
-  k10.canvas->canvasText("K10 PH TITRATOR", 1, 0x0000FF);
+  k10.canvas->canvasText("K10 PH TITRATOR", 1, COLOR_WARN);
 
   if (lastPh.adcOk) {
     snprintf(line, sizeof(line), "PH %.2f  MV %.0f", lastPh.ph, lastPh.millivolts);
   } else {
     snprintf(line, sizeof(line), "PH --    MV --");
   }
-  k10.canvas->canvasText(line, 3, lastPh.adcOk ? 0x00FF00 : 0xFFCC00);
+  k10.canvas->canvasText(line, 3, lastPh.adcOk ? COLOR_OK : COLOR_WARN);
 
   snprintf(line, sizeof(line), "TARGET %.2f %s", settings.targetPh, modeText());
-  k10.canvas->canvasText(line, 4, 0xFFFFFF);
+  k10.canvas->canvasText(line, 4, COLOR_TEXT);
 
   snprintf(line, sizeof(line), "USED %.1f/%.0fG", consumedGrams, settings.maxConsumedGrams);
-  k10.canvas->canvasText(line, 5, consumedGrams >= settings.maxConsumedGrams ? 0xFF0000 : 0x00FF00);
+  k10.canvas->canvasText(line, 5, consumedGrams >= settings.maxConsumedGrams ? COLOR_ERROR : COLOR_OK);
 
   if (scaleReady) {
     snprintf(line, sizeof(line), "BOTTLE %.1fG", lastScale.grams);
   } else {
     snprintf(line, sizeof(line), "BOTTLE --");
   }
-  k10.canvas->canvasText(line, 6, scaleReady ? 0xFFFFFF : 0xFFCC00);
+  k10.canvas->canvasText(line, 6, scaleReady ? COLOR_TEXT : COLOR_WARN);
 
-  snprintf(line, sizeof(line), "STATE %s", stateTextShort());
-  k10.canvas->canvasText(line, 8, state == RunState::Error ? 0xFF0000 : 0x0000FF);
+  snprintf(line, sizeof(line), "STATE %s", stateLabel().c_str());
+  k10.canvas->canvasText(line, 8, state == RunState::Error ? COLOR_ERROR : COLOR_WARN);
 
   snprintf(line, sizeof(line), "%s %s", staIpAddress != "0.0.0.0" ? "STA" : "AP", ipAddress.c_str());
-  k10.canvas->canvasText(line, 9, 0xFFCC00);
+  k10.canvas->canvasText(line, 9, COLOR_WARN);
 
   snprintf(line, sizeof(line), "PUMP %s", pump.isRunning() ? "ON" : "STOP");
-  k10.canvas->canvasText(line, 11, pump.isRunning() ? 0xFFCC00 : 0x7BB2CC);
+  k10.canvas->canvasText(line, 11, pump.isRunning() ? COLOR_WARN : COLOR_MUTED);
 
   snprintf(line, sizeof(line), "ADC %s  SCALE %s", lastPh.adcOk ? "OK" : "NO", scaleReady ? "OK" : "NO");
-  k10.canvas->canvasText(line, 12, (lastPh.adcOk && scaleReady) ? 0x7BB2CC : 0xFFCC00);
+  k10.canvas->canvasText(line, 12, (lastPh.adcOk && scaleReady) ? COLOR_MUTED : COLOR_WARN);
 
   k10.canvas->updateCanvas();
 }
@@ -1079,7 +1043,7 @@ void loop() {
     server.handleClient();
   }
   updateNetworkStatus();
-  if (restartPending && millis() >= restartAtMs) {
+  if (restartPending && millis() - restartAtMs >= RESTART_DELAY_MS) {
     pump.stop();
     ESP.restart();
   }

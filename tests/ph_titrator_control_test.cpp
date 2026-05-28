@@ -2,7 +2,7 @@
 #include <iostream>
 #include <string>
 
-#include "C:/Users/rocke/Documents/New project/ph_titrator/control_logic.h"
+#include "../ph_titrator/control_logic.h"
 
 static int failures = 0;
 
