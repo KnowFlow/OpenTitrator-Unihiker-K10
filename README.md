@@ -1,87 +1,139 @@
 # K10 pH Titrator
 
-UNIHIKER K10 based pH titrator controller. The sketch reads a pH probe through an ADS1115 ADC, measures titrant usage with an I2C HX711 scale module, and controls a DFR0523 peristaltic pump from P0.
+A standalone pH titration controller for the **UNIHIKER K10** (ESP32-S3). It automates acid–base titration with an adaptive pure-pulse dosing strategy, dual peristaltic pumps, a pH probe with ADS1115 ADC, and an I2C electronic scale.
+
+---
 
 ## Hardware
 
-- UNIHIKER K10, Arduino core `UNIHIKER:esp32:k10`
-- ADS1115 I2C ADC at `0x49`, pH probe on A0
-- DFRobot KIT0176 HX711 I2C scale module at `0x64`
-- DFRobot DFR0523 peristaltic pump signal on `P0`
-- Pump driver powered from an external 5-6 V supply, with common ground to K10
+| Component | Interface | Address / Pin | Notes |
+|-----------|-----------|---------------|-------|
+| UNIHIKER K10 | — | — | Arduino core `UNIHIKER:esp32:k10` |
+| ADS1115 ADC | I2C | `0x49` | pH probe on A0 |
+| DFRobot KIT0176 scale | I2C | `0x64` | HX711-based, reads reactor weight |
+| Titrant pump | Servo PWM | `P0` | Peristaltic pump (e.g. DFR0523) |
+| Sample pump | Servo PWM | `P1` | Peristaltic pump for sample delivery |
+| Pump power | External 5–6 V | — | Common ground with K10 |
 
-## Features
-
-- Standalone K10 display with pH, mV, target pH, mode, titrant used, bottle weight, state, IP, pump, ADC, and scale status.
-- Web control panel served by the K10.
-- AP is always enabled for fallback access.
-- Optional STA WiFi can be configured from the web UI and is saved in K10 Preferences.
-- Web UI updates live from `/json` without full page refresh, so forms remain editable.
-- Arduino OTA is enabled for future wireless firmware updates.
-- Acid/base dosing modes with target pH tolerance and maximum titrant usage limit.
-- Default maximum titrant usage is `75 g`.
-- Pump is stopped on boot, error, completion, emergency stop, and OTA start/error.
-
-## Network
-
-Default AP:
+### Wiring diagram (conceptual)
 
 ```text
-SSID: K10-pH-Titrator
-Password: 12345678
+K10 (3.3 V I2C)          ADS1115 (0x49)           Scale (0x64)
+├─ SDA ──────────────────┬────────────────────────┬
+├─ SCL ──────────────────┼────────────────────────┤
+├─ GND ──────────────────┴────────────────────────┴
+│
+├─ P0  ──► Titrant pump servo signal
+├─ P1  ──► Sample pump servo signal
+└─ 5V/GND ──► Shared power rail (pumps externally powered)
 ```
 
-Open the AP address shown on the K10 screen, usually:
+---
 
-```text
-http://192.168.4.1/
+## Software Highlights
+
+### Adaptive Pure-Pulse Titration
+Instead of continuous PWM, the controller doses the titrant in **timed pulses** whose length and settle time adapt to how far the current pH is from the target:
+
+| Zone | pH error | Pulse | Settle | Purpose |
+|------|----------|-------|--------|---------|
+| Steep | `|dpH/dt| > 0.08` | 30 ms | 8 s | Near equivalence point, prevent overshoot |
+| Far | `> 1.0` | 600 ms | 2 s | Fast approach |
+| Medium | `0.3 – 1.0` | 200 ms | 3.5 s | Controlled approach |
+| Near | `≤ 0.3` | 80 ms | 5 s | Fine-tuning |
+| Deadband | `≤ 0.05` | — | — | Stop, target reached |
+
+A `TitrationDynamics` tracker watches `dpH/dt` and halts immediately if the curve shows overshoot.
+
+### Automatic Pump Calibration
+From **SetupReady**, press **B** to enter calibration. The controller runs each pump for exactly 2 seconds, measures the weight change on the scale, computes the flow rate (g/s), and saves it to ESP32 Preferences.
+
+### Network & Remote Control
+- **AP mode** is always on (`K10-pH-Titrator` / `12345678`).
+- Optional **STA WiFi** configurable from the web UI and persisted in flash.
+- Responsive web dashboard with live `/json` polling (2 s).
+- **HTTP OTA** via `POST /ota` for browser-less firmware updates.
+- Arduino OTA (UDP 3232) also available.
+
+### Safety
+- Pump stops on boot, error, completion, emergency stop, and OTA start.
+- Sensor-fault detection (stuck ADC values 0 or 1023) triggers emergency stop.
+- Dual-stage filtering: EMA inside the pH driver + median-trimmed-mean (`PhFilter`) in the control loop.
+
+---
+
+## Quick Start
+
+### 1. Build
+
+```bash
+arduino-cli compile --fqbn UNIHIKER:esp32:k10 ./ph_titrator
 ```
 
-From the web Settings panel, enter the STA WiFi SSID and password. After saving, the controller restarts and keeps AP enabled while also joining the configured WiFi. The web header shows both AP and STA IP addresses.
+### 2. Upload (USB)
 
-OTA:
-
-```text
-Hostname: k10-ph-titrator
-Password: k10ph
+```bash
+arduino-cli upload -p COM4 --fqbn UNIHIKER:esp32:k10 ./ph_titrator
 ```
 
-## Controls
+### 3. Upload (HTTP OTA)
 
-On the K10:
-
-- `A` / `B`: adjust the current setup field
-- `AB` short press: confirm or move to the next setup step
-- `AB` long press: emergency stop
-
-On the web UI:
-
-- `Start`
-- `Stop`
-- `Tare scale`
-- `Reset`
-- `Emergency stop`
-- mode, target pH, max usage, and WiFi settings
-
-## Build And Upload
-
-Compile:
-
-```powershell
-& 'C:\Users\rocke\.agents\skills\unihiker-k10-arduino\scripts\arduino-cli.exe' compile --fqbn UNIHIKER:esp32:k10 .\ph_titrator
+```bash
+python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
 ```
 
-Upload:
+### 4. Connect
 
-```powershell
-& 'C:\Users\rocke\.agents\skills\unihiker-k10-arduino\scripts\arduino-cli.exe' upload -p COM4 --fqbn UNIHIKER:esp32:k10 .\ph_titrator
+Join the `K10-pH-Titrator` WiFi, open the AP IP shown on the K10 screen (usually `http://192.168.4.1/`), or use the STA IP if configured.
+
+---
+
+## On-Device Controls
+
+| State | Button A | Button B | AB Short | AB Long |
+|-------|----------|----------|----------|---------|
+| SetupMode | Toggle mode | Toggle mode | → SetupTarget | Panic |
+| SetupTarget | Target –0.05 | Target +0.05 | → SetupReady | Panic |
+| SetupReady | Tare | **Calibrate** | Start titration | Panic |
+| Running / Dosing / … | — | — | Pause | Panic |
+| Paused | — | — | Resume | Panic |
+| Calibrating | Cancel | Cancel | Cancel | Panic |
+| Done / Error | — | — | Reset | Panic |
+
+---
+
+## Web UI Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Main dashboard |
+| `/json` | GET | Live status JSON |
+| `/set` | GET | Save settings (`mode`, `target`, `max`, `sample`, `titrant`, `titrant_m`, `ssid`, `wifi_password`) |
+| `/action?cmd=` | GET | `start`, `stop`, `panic`, `tare`, `reset` |
+| `/ota` | POST | Firmware binary upload |
+
+---
+
+## Project Structure
+
+```
+ph_titrator/
+├── ph_titrator.ino      # Main sketch (state machine, web UI, display)
+├── control_logic.h      # Titration math, filters, adaptive dose logic
+└── partitions.csv       # 16 MB OTA partition table
+
+tests/
+├── ph_titrator_control_test.cpp         # Native C++ unit tests
+└── ph_titrator_control_test/
+    └── ph_titrator_control_test.ino     # Arduino-hosted unit tests
+
+scripts/
+├── ota_upload.py        # HTTP OTA helper
+└── ota_upload.ps1       # PowerShell OTA helper
 ```
 
-## Test Plan
+---
 
-- Compile the main sketch.
-- Verify K10 screen text remains readable and does not fall back to blue blocks.
-- Verify AP page opens and form inputs are not cleared by live updates.
-- Save STA WiFi settings and confirm the web UI shows a STA IP after reconnecting.
-- Confirm `/json` includes pH, mV, AP IP, STA IP, OTA state, pump state, bottle weight, and usage.
-- Run first liquid tests with water or a safe substitute before connecting real titrant.
+## License
+
+MIT — see repository for details.
