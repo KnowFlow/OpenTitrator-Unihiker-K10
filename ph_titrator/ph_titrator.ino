@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ArduinoOTA.h>
+#include <Update.h>
 #include <Preferences.h>
 #include <ESP32Servo.h>
 #include "unihiker_k10.h"
@@ -152,6 +153,8 @@ private:
     return (int16_t)value;
   }
 
+  // First-stage EMA filter inside the sensor driver (0.75/0.25) to
+  // suppress single-sample ADC spikes before they reach the control loop.
   float smoothPh(float ph) {
     if (!hasFilter) {
       filteredPh = ph;
@@ -442,12 +445,12 @@ void setState(RunState next, const String &status) {
   displayDirty = true;
 }
 
-String modeLabel() {
+const char *modeText() {
   return settings.mode == TitrationMode::AddBase ? "BASE" : "ACID";
 }
 
-const char *modeText() {
-  return settings.mode == TitrationMode::AddBase ? "BASE" : "ACID";
+String modeLabel() {
+  return modeText();
 }
 
 String titrantLabel() {
@@ -779,6 +782,9 @@ void sampleSensors() {
       setState(RunState::Error, "SENSOR_FAULT");
     }
 
+    // Second-stage median-trimmed-mean filter (PhFilter) running in the
+    // main loop. This operates on raw ADS counts and provides the pH value
+    // that drives the titration controller.
     phFilter.add(rawPh.raw);
     lastPh = rawPh;
     if (phFilter.ready()) {
@@ -913,6 +919,7 @@ String htmlEscape(const String &value) {
   out.replace("<", "&lt;");
   out.replace(">", "&gt;");
   out.replace("\"", "&quot;");
+  out.replace("'", "&#39;");
   return out;
 }
 
@@ -920,6 +927,11 @@ String jsonEscape(const String &value) {
   String out = value;
   out.replace("\\", "\\\\");
   out.replace("\"", "\\\"");
+  out.replace("\b", "\\b");
+  out.replace("\f", "\\f");
+  out.replace("\n", "\\n");
+  out.replace("\r", "\\r");
+  out.replace("\t", "\\t");
   return out;
 }
 
@@ -1209,6 +1221,39 @@ void handleJson() {
   server.send(200, "application/json", json);
 }
 
+void handleOta() {
+  server.sendHeader("Connection", "close");
+  server.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
+  if (!Update.hasError()) {
+    scheduleRestart("OTA update done");
+  }
+}
+
+void handleOtaUpload() {
+  HTTPUpload &upload = server.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    statusLine = "OTA upload";
+    displayDirty = true;
+    Serial.printf("OTA: %s\n", upload.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) {
+      Serial.printf("OTA Success: %u bytes\n", upload.totalSize);
+      statusLine = "OTA done";
+    } else {
+      Update.printError(Serial);
+      statusLine = "OTA fail";
+    }
+    displayDirty = true;
+  }
+}
+
 void startNetwork() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(AP_SSID, AP_PASSWORD);
@@ -1237,6 +1282,7 @@ void startNetwork() {
   server.on("/set", handleSet);
   server.on("/action", handleAction);
   server.on("/json", handleJson);
+  server.on("/ota", HTTP_POST, handleOta, handleOtaUpload);
   server.begin();
   webReady = true;
 

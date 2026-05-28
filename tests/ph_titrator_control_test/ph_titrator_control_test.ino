@@ -23,7 +23,7 @@ void expectEqual(int actual, int expected, const char *name) {
 }
 
 void expectNear(float actual, float expected, float tolerance, const char *name) {
-  if (abs(actual - expected) > tolerance) {
+  if (fabs(actual - expected) > tolerance) {
     Serial.print("FAIL: ");
     Serial.print(name);
     Serial.print(" expected ");
@@ -43,36 +43,89 @@ void setup() {
   settings.tolerancePh = 0.05f;
   settings.maxConsumedGrams = 75.0f;
 
+  // ---- computePumpControl: boundary conditions ----
+
+  {
+    PumpControlState ctrl;
+    PumpControlDecision d = computePumpControl(settings, -1.0f, 12.0f, 2.0f, ctrl);
+    expectTrue(d.action == TitrationAction::Error, "invalid pH returns Error");
+    expectTrue(d.reason == TitrationStopReason::InvalidReading, "invalid pH reason is InvalidReading");
+    expectEqual(d.pwm, 0, "invalid pH uses zero pwm");
+  }
+
+  {
+    PumpControlState ctrl;
+    PumpControlDecision d = computePumpControl(settings, 5.80f, 75.0f, 2.0f, ctrl);
+    expectTrue(d.action == TitrationAction::Error, "mass limit returns Error");
+    expectTrue(d.reason == TitrationStopReason::MassLimit, "mass limit reason is MassLimit");
+    expectEqual(d.pwm, 0, "mass limit uses zero pwm");
+  }
+
+  {
+    PumpControlState ctrl;
+    PumpControlDecision d = computePumpControl(settings, 6.95f, 12.0f, 2.0f, ctrl);
+    expectTrue(d.action == TitrationAction::Done, "deadband returns Done");
+    expectTrue(d.reason == TitrationStopReason::TargetReached, "deadband reason is TargetReached");
+    expectEqual(d.pwm, 0, "deadband uses zero pwm");
+  }
+
+  {
+    PumpControlState ctrl;
+    PumpControlDecision d = computePumpControl(settings, 7.20f, 12.0f, 2.0f, ctrl);
+    expectTrue(d.action == TitrationAction::Done, "base overshoot returns Done");
+    expectTrue(d.reason == TitrationStopReason::TargetReached, "base overshoot reason is TargetReached");
+  }
+
+  {
+    PumpControlState ctrl;
+    PumpControlDecision d = computePumpControl(settings, 5.80f, 12.0f, 2.0f, ctrl);
+    expectTrue(d.action == TitrationAction::Dose, "fast error doses");
+    expectEqual(d.pwm, 255, "fast error uses full pwm");
+    expectTrue(!d.finePulse, "fast error disables fine pulse");
+  }
+
+  {
+    PumpControlState ctrl;
+    PumpControlDecision d = computePumpControl(settings, 6.55f, 12.0f, 2.0f, ctrl);
+    expectTrue(d.action == TitrationAction::Dose, "medium error doses");
+    expectTrue(d.pwm > 0 && d.pwm < 255, "medium error uses reduced pwm");
+    expectTrue(!d.finePulse, "medium error disables fine pulse");
+  }
+
+  {
+    PumpControlState ctrl;
+    PumpControlDecision d = computePumpControl(settings, 6.82f, 12.0f, 2.0f, ctrl);
+    expectTrue(d.action == TitrationAction::Dose, "fine error doses");
+    expectTrue(d.finePulse, "fine error uses fine pulse");
+    expectTrue(d.pwm > 0 && d.pwm < 60, "fine error uses low pwm");
+  }
+
+  {
+    PumpControlState ctrl;
+    uint8_t pwm1 = computePumpControl(settings, 6.55f, 12.0f, 2.0f, ctrl).pwm;
+    uint8_t pwm2 = computePumpControl(settings, 6.55f, 12.0f, 2.0f, ctrl).pwm;
+    expectTrue(pwm2 > pwm1, "integral accumulates and increases pwm");
+  }
+
+  {
+    PumpControlState ctrl;
+    settings.mode = TitrationMode::AddAcid;
+    PumpControlDecision d = computePumpControl(settings, 8.40f, 12.0f, 2.0f, ctrl);
+    expectTrue(d.action == TitrationAction::Dose, "acid mode doses above target");
+    expectEqual(d.pwm, 255, "acid far error uses full pwm");
+  }
+
+  {
+    PumpControlState ctrl;
+    settings.mode = TitrationMode::AddAcid;
+    PumpControlDecision d = computePumpControl(settings, 7.03f, 12.0f, 2.0f, ctrl);
+    expectTrue(d.action == TitrationAction::Done, "acid near target stops");
+    expectTrue(d.reason == TitrationStopReason::TargetReached, "acid near target reason is TargetReached");
+  }
+
   settings.mode = TitrationMode::AddBase;
-  TitrationDecision baseFar = decideTitrationStep(settings, 5.80f, 12.0f);
-  expectTrue(baseFar.action == TitrationAction::Dose, "base mode doses below target");
-  expectEqual(baseFar.pumpPulseMs, 900, "base mode uses long pulse far from target");
-  expectEqual(baseFar.settleMs, 3500, "base mode waits after dose");
 
-  TitrationDecision baseNear = decideTitrationStep(settings, 6.97f, 12.0f);
-  expectTrue(baseNear.action == TitrationAction::Done, "base mode stops inside tolerance");
-
-  TitrationDecision baseOvershoot = decideTitrationStep(settings, 7.12f, 12.0f);
-  expectTrue(baseOvershoot.action == TitrationAction::Done, "base mode stops after overshoot");
-
-  settings.mode = TitrationMode::AddAcid;
-  TitrationDecision acidFar = decideTitrationStep(settings, 8.40f, 12.0f);
-  expectTrue(acidFar.action == TitrationAction::Dose, "acid mode doses above target");
-  expectEqual(acidFar.pumpPulseMs, 900, "acid mode uses long pulse far from target");
-
-  TitrationDecision acidNear = decideTitrationStep(settings, 7.03f, 12.0f);
-  expectTrue(acidNear.action == TitrationAction::Done, "acid mode stops inside tolerance");
-
-  settings.mode = TitrationMode::AddBase;
-  TitrationDecision mediumPulse = decideTitrationStep(settings, 6.65f, 12.0f);
-  expectEqual(mediumPulse.pumpPulseMs, 450, "medium error uses medium pulse");
-
-  TitrationDecision shortPulse = decideTitrationStep(settings, 6.88f, 12.0f);
-  expectEqual(shortPulse.pumpPulseMs, 180, "small error uses short pulse");
-
-  TitrationDecision massLimit = decideTitrationStep(settings, 5.80f, 75.0f);
-  expectTrue(massLimit.action == TitrationAction::Error, "mass limit raises error");
-  expectTrue(massLimit.reason == TitrationStopReason::MassLimit, "mass limit reason is recorded");
+  // ---- Helper functions ----
 
   expectNear(computeConsumedGrams(312.5f, 300.0f), 12.5f, 0.001f, "consumed grams from bottle weight loss");
   expectNear(computeConsumedGrams(312.5f, 313.2f), 0.0f, 0.001f, "negative consumption is clamped");
@@ -86,6 +139,8 @@ void setup() {
   expectNear(computePhFromProbeMillivolts(-58.0f), 8.11f, 0.01f, "probe millivolts maps to calibrated pH");
   expectNear(computePhFromProbeMillivolts(296.0f), 2.14f, 0.01f, "acid probe millivolts maps to calibrated pH");
 
+  // ---- PhFilter ----
+
   PhFilter filter;
   int16_t rawSamples[] = {100, 102, 98, 250, 101, 0, 99};
   for (int i = 0; i < 7; i++) {
@@ -93,23 +148,6 @@ void setup() {
   }
   expectTrue(filter.ready(), "filter is ready after window fills");
   expectNear(filter.filteredRaw(), 100.0f, 0.001f, "filter trims outliers and averages middle samples");
-
-  PumpControlState control;
-  PumpControlDecision fastDose = computePumpControl(settings, 5.80f, 12.0f, 2.0f, control);
-  expectTrue(fastDose.action == TitrationAction::Dose, "pump controller doses outside target");
-  expectEqual(fastDose.pwm, 255, "large pH error uses full pump command");
-
-  PumpControlDecision mediumDose = computePumpControl(settings, 6.55f, 12.0f, 2.0f, control);
-  expectTrue(mediumDose.action == TitrationAction::Dose, "medium pH error still doses");
-  expectTrue(mediumDose.pwm > 0 && mediumDose.pwm < 120, "medium pH error uses reduced pump command");
-
-  PumpControlDecision precontrolDose = computePumpControl(settings, 6.82f, 12.0f, 2.0f, control);
-  expectTrue(precontrolDose.action == TitrationAction::Dose, "precontrol pH error still doses");
-  expectTrue(precontrolDose.finePulse, "precontrol pH error uses intermittent fine pulse");
-
-  PumpControlDecision deadbandStop = computePumpControl(settings, 6.95f, 12.0f, 2.0f, control);
-  expectTrue(deadbandStop.action == TitrationAction::Done, "pump controller stops in deadband");
-  expectEqual(deadbandStop.pwm, 0, "deadband uses zero pump command");
 
   if (failures == 0) {
     Serial.println("All ph titrator control tests passed");

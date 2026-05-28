@@ -38,13 +38,6 @@ struct TitrationSettings {
   float titrantMolarity = 0.01f;
 };
 
-struct TitrationDecision {
-  TitrationAction action = TitrationAction::Done;
-  TitrationStopReason reason = TitrationStopReason::None;
-  uint16_t pumpPulseMs = 0;
-  uint16_t settleMs = 0;
-};
-
 struct PhFilter {
   static constexpr uint8_t Window = 7;
   int16_t values[Window] = {};
@@ -103,7 +96,6 @@ struct PumpControlDecision {
   TitrationStopReason reason = TitrationStopReason::None;
   uint8_t pwm = 0;
   bool finePulse = false;
-  bool precontrol = false;
 };
 
 inline float absoluteFloat(float value) {
@@ -255,7 +247,6 @@ inline PumpControlDecision computePumpControl(
   float basePwm = 25.0f;
   float piOutput = 0.0f;
   decision.finePulse = true;
-  decision.precontrol = magnitude <= fineThresholdPh;
   if (magnitude > fastThresholdPh) {
     basePwm = 255.0f;
     decision.finePulse = false;
@@ -272,59 +263,6 @@ inline PumpControlDecision computePumpControl(
 
   decision.action = TitrationAction::Dose;
   decision.pwm = clampPwm(basePwm + piOutput);
-  return decision;
-}
-
-inline uint16_t pulseForError(float errorMagnitude) {
-  if (errorMagnitude > 0.70f) {
-    return 900;
-  }
-  if (errorMagnitude > 0.20f) {
-    return 450;
-  }
-  return 180;
-}
-
-inline TitrationDecision decideTitrationStep(
-    const TitrationSettings &settings,
-    float currentPh,
-    float consumedGrams) {
-  TitrationDecision decision;
-
-  if (!isValidPh(currentPh)) {
-    decision.action = TitrationAction::Error;
-    decision.reason = TitrationStopReason::InvalidReading;
-    return decision;
-  }
-
-  if (consumedGrams >= settings.maxConsumedGrams) {
-    decision.action = TitrationAction::Error;
-    decision.reason = TitrationStopReason::MassLimit;
-    return decision;
-  }
-
-  const float signedError = settings.targetPh - currentPh;
-  const float magnitude = absoluteFloat(signedError);
-
-  if (magnitude <= settings.tolerancePh) {
-    decision.action = TitrationAction::Done;
-    decision.reason = TitrationStopReason::TargetReached;
-    return decision;
-  }
-
-  const bool shouldAddBase = settings.mode == TitrationMode::AddBase && currentPh < settings.targetPh;
-  const bool shouldAddAcid = settings.mode == TitrationMode::AddAcid && currentPh > settings.targetPh;
-
-  if (!shouldAddBase && !shouldAddAcid) {
-    decision.action = TitrationAction::Done;
-    decision.reason = TitrationStopReason::TargetReached;
-    return decision;
-  }
-
-  decision.action = TitrationAction::Dose;
-  decision.reason = TitrationStopReason::None;
-  decision.pumpPulseMs = pulseForError(magnitude);
-  decision.settleMs = 3500;
   return decision;
 }
 
