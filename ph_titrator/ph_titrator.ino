@@ -545,7 +545,7 @@ bool startTitration() {
   }
 
   pump.stop();
-  samplePump.runContinuous();
+  samplePump.stop();
   phFilter.reset();
   phDynamics.reset();
   sensorFaultCount = 0;
@@ -557,7 +557,12 @@ bool startTitration() {
   resultConcentrationM = 0.0f;
   phReady = false;
   stopReason = TitrationStopReason::None;
-  setState(RunState::SampleFilling, "Filling sample");
+  if (settings.sampleGrams <= 0.01f) {
+    setState(RunState::FilterWarmup, "Stabilizing pH");
+  } else {
+    samplePump.runContinuous();
+    setState(RunState::SampleFilling, "Filling sample");
+  }
   return true;
 }
 
@@ -1141,7 +1146,7 @@ String htmlPage() {
   page += String(settings.targetPh, 2);
   page += F("'></label><label>Max used g<input name='max' type='number' min='1' max='1000' step='1' value='");
   page += String(settings.maxConsumedGrams, 1);
-  page += F("'></label><label>Sample g<input name='sample' type='number' min='1' max='1000' step='0.1' value='");
+  page += F("'></label><label>Sample g<input name='sample' type='number' min='0' max='1000' step='0.1' value='");
   page += String(settings.sampleGrams, 1);
   page += F("'></label></div><div class='row' style='margin-top:10px'>");
   page += F("<label>Titrant<select name='titrant'><option value='naoh001'");
@@ -1226,7 +1231,7 @@ void handleSet() {
     settings.maxConsumedGrams = constrain(server.arg("max").toFloat(), 1.0f, 1000.0f);
   }
   if (server.hasArg("sample")) {
-    settings.sampleGrams = constrain(server.arg("sample").toFloat(), 1.0f, 1000.0f);
+    settings.sampleGrams = constrain(server.arg("sample").toFloat(), 0.0f, 1000.0f);
   }
   if (server.hasArg("titrant")) {
     String titrant = server.arg("titrant");

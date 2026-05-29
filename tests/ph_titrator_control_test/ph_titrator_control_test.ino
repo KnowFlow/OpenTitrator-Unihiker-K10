@@ -87,24 +87,32 @@ void setup() {
   {
     TitrationDecision d = decideAdaptiveDose(settings, 5.80f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "far error doses");
-    expectEqual(d.pumpPulseMs, 300, "far error uses 300ms pulse");
-    expectEqual(d.settleMs, 6000, "far error uses 6s settle");
+    expectEqual(d.pumpPulseMs, 450, "far error uses 450ms pulse");
+    expectEqual(d.settleMs, 5000, "far error uses 5s settle");
   }
 
   // Medium error -> medium pulse
   {
     TitrationDecision d = decideAdaptiveDose(settings, 6.55f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "medium error doses");
-    expectEqual(d.pumpPulseMs, 100, "medium error uses 100ms pulse");
-    expectEqual(d.settleMs, 10000, "medium error uses 10s settle");
+    expectEqual(d.pumpPulseMs, 150, "medium error uses 150ms pulse");
+    expectEqual(d.settleMs, 8000, "medium error uses 8s settle");
   }
 
   // Near error -> small pulse
   {
     TitrationDecision d = decideAdaptiveDose(settings, 6.82f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "near error doses");
-    expectEqual(d.pumpPulseMs, 40, "near error uses 40ms pulse");
-    expectEqual(d.settleMs, 15000, "near error uses 15s settle");
+    expectEqual(d.pumpPulseMs, 60, "near error uses 60ms pulse");
+    expectEqual(d.settleMs, 12000, "near error uses 12s settle");
+  }
+
+  // Very near error -> micro pulse
+  {
+    TitrationDecision d = decideAdaptiveDose(settings, 6.93f, 12.0f, dyn);
+    expectTrue(d.action == TitrationAction::Dose, "very near error doses");
+    expectEqual(d.pumpPulseMs, 25, "very near error uses 25ms pulse");
+    expectEqual(d.settleMs, 15000, "very near error uses 15s settle");
   }
 
   // Steep slope -> micro pulse
@@ -137,7 +145,7 @@ void setup() {
     settings.mode = TitrationMode::AddAcid;
     TitrationDecision d = decideAdaptiveDose(settings, 8.40f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "acid mode doses above target");
-    expectEqual(d.pumpPulseMs, 300, "acid far error uses 300ms pulse");
+    expectEqual(d.pumpPulseMs, 450, "acid far error uses 450ms pulse");
   }
 
   // Acid mode: near target -> stop
@@ -157,6 +165,18 @@ void setup() {
     TitrationDecision d = decideAdaptiveDose(settings, 7.56f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Done, "acid near target and falling stops early");
     expectTrue(d.reason == TitrationStopReason::TargetReached, "acid predictive stop reason is TargetReached");
+    settings.targetPh = 7.00f;
+  }
+
+  // Acid mode gets a wider predictive stop to account for slower downward response.
+  {
+    dyn.reset();
+    dyn.add(8.16f, 0);
+    dyn.add(8.14f, 2000);
+    settings.targetPh = 8.00f;
+    TitrationDecision d = decideAdaptiveDose(settings, 8.14f, 12.0f, dyn);
+    expectTrue(d.action == TitrationAction::Done, "acid 0.14 above target and falling stops early");
+    expectTrue(d.reason == TitrationStopReason::TargetReached, "acid wider predictive stop reason is TargetReached");
     settings.targetPh = 7.00f;
   }
 

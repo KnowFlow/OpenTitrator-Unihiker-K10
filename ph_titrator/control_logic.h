@@ -329,7 +329,9 @@ inline TitrationDecision decideAdaptiveDose(
   const bool driftingTowardTarget =
       (settings.mode == TitrationMode::AddBase && slope > 0.001f) ||
       (settings.mode == TitrationMode::AddAcid && slope < -0.001f);
-  if (error <= 0.10f && driftingTowardTarget) {
+  const float predictiveStopMargin =
+      settings.mode == TitrationMode::AddAcid ? 0.15f : 0.10f;
+  if (error <= predictiveStopMargin && driftingTowardTarget) {
     d.action = TitrationAction::Done;
     d.reason = TitrationStopReason::TargetReached;
     return d;
@@ -342,15 +344,19 @@ inline TitrationDecision decideAdaptiveDose(
     d.settleMs = 15000;
   } else if (error > 1.0f) {
     d.action = TitrationAction::Dose;
-    d.pumpPulseMs = 300;
-    d.settleMs = 6000;
+    d.pumpPulseMs = 450;
+    d.settleMs = 5000;
   } else if (error > 0.3f) {
     d.action = TitrationAction::Dose;
-    d.pumpPulseMs = 100;
-    d.settleMs = 10000;
+    d.pumpPulseMs = 150;
+    d.settleMs = 8000;
+  } else if (error > 0.1f) {
+    d.action = TitrationAction::Dose;
+    d.pumpPulseMs = 60;
+    d.settleMs = 12000;
   } else {
     d.action = TitrationAction::Dose;
-    d.pumpPulseMs = 40;
+    d.pumpPulseMs = 25;
     d.settleMs = 15000;
   }
   return d;
