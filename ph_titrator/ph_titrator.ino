@@ -36,6 +36,9 @@ const uint32_t SAMPLE_INTERVAL_MS = 2000;
 const uint32_t SETTLING_TIME_MS = 5000;
 const uint32_t PUMP_DUTY_CYCLE_MS = 5000;
 const uint32_t FINE_PULSE_RUN_MS = 500;
+const uint32_t CALIBRATION_PREP_MS = 2000;
+const uint32_t CALIBRATION_PUMP_RUN_MS = 2000;
+const uint32_t CALIBRATION_SETTLE_MS = 5000;
 const uint8_t SENSOR_FAULT_LIMIT = 10;
 
 const char *AP_SSID = "K10-pH-Titrator";
@@ -89,6 +92,17 @@ struct ScaleReading {
   bool ok = false;
 };
 
+struct PhCalibration {
+  float lowAdsMillivolts = 1329.3334f;
+  float lowProbeMillivolts = -59.0f;
+  float lowPh = 8.11f;
+  float highAdsMillivolts = 2387.3333f;
+  float highProbeMillivolts = 296.0f;
+  float highPh = 2.14f;
+};
+
+PhCalibration phCalibration;
+
 bool devicePresent(uint8_t address);
 
 extern bool otaReady;
@@ -109,8 +123,18 @@ public:
 
     reading.raw = raw;
     reading.adcOk = true;
-    reading.millivolts = computeProbeMillivoltsFromAdsInput(raw * 0.125f);
-    reading.ph = smoothPh(computePhFromProbeMillivolts(reading.millivolts));
+    reading.millivolts = computeProbeMillivoltsFromAdsInput(
+        raw * 0.125f,
+        phCalibration.lowAdsMillivolts,
+        phCalibration.lowProbeMillivolts,
+        phCalibration.highAdsMillivolts,
+        phCalibration.highProbeMillivolts);
+    reading.ph = smoothPh(computePhFromProbeMillivolts(
+        reading.millivolts,
+        phCalibration.lowProbeMillivolts,
+        phCalibration.lowPh,
+        phCalibration.highProbeMillivolts,
+        phCalibration.highPh));
     reading.ok = isValidPh(reading.ph);
     return reading;
   }
@@ -202,6 +226,16 @@ public:
     offset = averageRaw(10);
     uint8_t data = 0;
     writeRegister(0x73, &data, 1);
+  }
+
+  float calibrationFactor() const {
+    return calibration;
+  }
+
+  void setCalibrationFactor(float value) {
+    if (value > 0.0f && value < 100000.0f) {
+      calibration = value;
+    }
   }
 
   ScaleReading read() {
@@ -415,6 +449,11 @@ void setState(RunState next, const String &status) {
   statusLine = status;
   stateStartedMs = millis();
   displayDirty = true;
+}
+
+void updatePumpTimeouts() {
+  pump.update();
+  samplePump.update();
 }
 
 const char *modeText() {
@@ -783,8 +822,18 @@ void sampleSensors() {
     if (phFilter.ready()) {
       float filteredRaw = phFilter.filteredRaw();
       lastPh.raw = (int16_t)(filteredRaw + (filteredRaw >= 0.0f ? 0.5f : -0.5f));
-      lastPh.millivolts = computeProbeMillivoltsFromAdsInput(filteredRaw * 0.125f);
-      lastPh.ph = computePhFromProbeMillivolts(lastPh.millivolts);
+      lastPh.millivolts = computeProbeMillivoltsFromAdsInput(
+          filteredRaw * 0.125f,
+          phCalibration.lowAdsMillivolts,
+          phCalibration.lowProbeMillivolts,
+          phCalibration.highAdsMillivolts,
+          phCalibration.highProbeMillivolts);
+      lastPh.ph = computePhFromProbeMillivolts(
+          lastPh.millivolts,
+          phCalibration.lowProbeMillivolts,
+          phCalibration.lowPh,
+          phCalibration.highProbeMillivolts,
+          phCalibration.highPh);
       lastPh.ok = isValidPh(lastPh.ph);
       phReady = lastPh.ok && !sensorFault;
       phSampleFresh = phReady;
@@ -811,8 +860,7 @@ void sampleSensors() {
 }
 
 void runController() {
-  pump.update();
-  samplePump.update();
+  updatePumpTimeouts();
 
   if (state == RunState::SampleFilling) {
     if (!scaleReady) {
@@ -958,7 +1006,7 @@ void scheduleRestart(const String &message) {
 
 String htmlPage() {
   String page;
-  page.reserve(7000);
+  page.reserve(11000);
   int usedPercent = (int)constrain((consumedGrams / settings.maxConsumedGrams) * 100.0f, 0.0f, 100.0f);
   page += F("<!doctype html><html><head><meta charset='utf-8'>");
   page += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
@@ -969,7 +1017,7 @@ String htmlPage() {
   page += F(".hero{border:1px solid var(--line);border-radius:10px;background:linear-gradient(135deg,#0f2630,#081219);padding:18px;margin-bottom:12px;display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.ph{font-size:72px;line-height:.95;font-weight:800}.unit{font-size:18px;color:var(--muted);margin-left:6px}.sub{color:var(--muted);margin-top:10px}.status{display:grid;gap:8px;align-content:center}.status b{font-size:22px}");
   page += F(".grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.card{border:1px solid var(--line);border-radius:8px;padding:13px;background:rgba(13,29,36,.9)}.k{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.07em}.v{font-size:28px;font-weight:700;margin-top:5px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}");
   page += F(".bar{height:10px;background:#071014;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-top:10px}.fill{height:100%;background:linear-gradient(90deg,var(--ok),var(--warn))}.split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}label{display:grid;gap:5px;color:var(--muted);font-size:12px;min-width:130px;flex:1}");
-  page += F("button,.btn,input,select{font:inherit;border-radius:7px;border:1px solid #3a6472;background:#0a1a21;color:var(--text);padding:10px 12px;text-decoration:none}button,.btn{display:inline-block;cursor:pointer;font-weight:700}.primary{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.danger{background:#351216;border-color:#8c3640;color:#ffd1d1}.ghost{color:var(--blue)}h2{margin:0 0 10px;font-size:16px}.tiny{font-size:12px;color:var(--muted)}@media(max-width:720px){.hero,.split{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.ph{font-size:58px}.top{display:block}.pill{justify-content:flex-start;margin-top:8px}.pill span{border-radius:7px}}</style></head><body><main>");
+  page += F("button,.btn,input,select{font:inherit;border-radius:7px;border:1px solid #3a6472;background:#0a1a21;color:var(--text);padding:10px 12px;text-decoration:none}button,.btn{display:inline-block;cursor:pointer;font-weight:700}.primary{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.danger{background:#351216;border-color:#8c3640;color:#ffd1d1}.ghost{color:var(--blue)}h2{margin:0 0 10px;font-size:16px}.tiny{font-size:12px;color:var(--muted)}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tab{background:#071820;color:var(--blue)}.tab.active{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.panel{display:none}.panel.active{display:block}.full{margin-top:10px}.mini{max-width:170px}@media(max-width:720px){.hero,.split{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.ph{font-size:58px}.top{display:block}.pill{justify-content:flex-start;margin-top:8px}.pill span{border-radius:7px}}</style></head><body><main>");
   page += F("<style>.ph,.v,#status,#mv{font-variant-numeric:tabular-nums}.ph{min-height:72px}.sub{min-height:22px}</style>");
 
   page += F("<div class='top'><div><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>pH Titrator</div></div><div id='network' class='pill'>");
@@ -1022,11 +1070,11 @@ String htmlPage() {
   page += String(settings.sampleGrams, 1);
   page += F(" g</div></div></section>");
 
-  page += F("<section class='split'><div class='card'><h2>Actions</h2><div class='row'>");
+  page += F("<nav class='tabs'><button class='tab active' data-tab='run' type='button'>Run</button><button class='tab' data-tab='cal' type='button'>Calibration</button><button class='tab' data-tab='manual' type='button'>Manual</button><button class='tab' data-tab='admin' type='button'>Admin</button></nav>");
+  page += F("<section id='tab-run' class='panel active'><div class='card full'><h2>Actions</h2><div class='row'>");
   page += state == RunState::Paused ? F("<a class='btn primary' href='/action?cmd=start'>Resume</a>") : F("<a class='btn primary' href='/action?cmd=start'>Start</a>");
   page += F("<a class='btn' href='/action?cmd=stop'>Pause</a>");
   page += F("<a class='btn' href='/action?cmd=tare'>Tare scale</a>");
-  page += F("<a class='btn' href='/action?cmd=calibrate'>Calibrate pumps</a>");
   page += F("<a class='btn ghost' href='/action?cmd=reset'>Reset</a>");
   page += F("<a class='btn danger' href='/action?cmd=panic'>Emergency stop</a>");
   page += F("</div><p class='tiny'>ADC ");
@@ -1043,9 +1091,40 @@ String htmlPage() {
   page += htmlEscape(staIpAddress);
   page += F(" / OTA host ");
   page += htmlEscape(String(OTA_HOSTNAME));
-  page += F("</p><p class='tiny'><a class='ghost' href='/json'>JSON status</a></p></div>");
+  page += F("</p><p class='tiny'><a class='ghost' href='/json'>JSON status</a></p></div></section>");
 
-  page += F("<div><form action='/set' method='get' class='card'><h2>Settings</h2><div class='row'>");
+  page += F("<section id='tab-cal' class='panel'><div class='card full'><h2>Calibration Actions</h2><div class='row'>");
+  page += F("<a class='btn' href='/action?cmd=ready'>Enter ready</a>");
+  page += F("<a class='btn primary' href='/action?cmd=calibrate'>Calibrate pumps</a>");
+  page += F("<a class='btn' href='/action?cmd=scale_calibrate'>Scale calibrate</a>");
+  page += F("<a class='btn' href='/action?cmd=ph_signal_calibrate'>pH/mV calibrate</a>");
+  page += F("</div><p class='tiny'>Enter ready stops both pumps and puts the controller in READY. Pump calibration can then be started here or with the K10 B key. Each pump runs 2 s, then waits 5 s before reading the scale.</p></div>");
+  page += F("<form action='/set' method='get' class='card full'><h2>Calibration Values</h2><div class='row'>");
+  page += F("<label>pH point A<input name='low_ph' type='number' min='0' max='14' step='0.01' value='");
+  page += String(phCalibration.lowPh, 2);
+  page += F("'></label><label>Point A probe mV<input name='low_probe_mv' type='number' min='-1000' max='1000' step='0.1' value='");
+  page += String(phCalibration.lowProbeMillivolts, 1);
+  page += F("'></label><label>Point A ADS mV<input name='low_ads_mv' type='number' min='-4096' max='4096' step='0.1' value='");
+  page += String(phCalibration.lowAdsMillivolts, 1);
+  page += F("'></label></div><div class='row' style='margin-top:10px'>");
+  page += F("<label>pH point B<input name='high_ph' type='number' min='0' max='14' step='0.01' value='");
+  page += String(phCalibration.highPh, 2);
+  page += F("'></label><label>Point B probe mV<input name='high_probe_mv' type='number' min='-1000' max='1000' step='0.1' value='");
+  page += String(phCalibration.highProbeMillivolts, 1);
+  page += F("'></label><label>Point B ADS mV<input name='high_ads_mv' type='number' min='-4096' max='4096' step='0.1' value='");
+  page += String(phCalibration.highAdsMillivolts, 1);
+  page += F("'></label></div><div class='row' style='margin-top:10px'>");
+  page += F("<label>Titrant pump g/s<input name='titrant_gps' type='number' min='0' max='100' step='0.001' value='");
+  page += String(titrantPumpFlowRateGps, 3);
+  page += F("'></label><label>Sample pump g/s<input name='sample_gps' type='number' min='0' max='100' step='0.001' value='");
+  page += String(samplePumpFlowRateGps, 3);
+  page += F("'></label><label>Scale factor<input name='scale_factor' type='number' min='1' max='100000' step='0.1' value='");
+  page += String(scaleSensor.calibrationFactor(), 1);
+  page += F("'></label></div><p class='tiny'>Use pump calibration to measure flow, Scale calibrate to tare the reactor scale, and pH/mV calibrate to restart filtered pH acquisition before saving refined points here.</p><button class='primary' type='submit'>Save calibration</button></form></section>");
+
+  page += F("<section id='tab-manual' class='panel'><div class='card full'><h2>Manual Operation</h2><form id='manualForm' action='/action' method='get' class='row'><label class='mini'>Run seconds<input name='sec' type='number' min='0.1' max='30' step='0.1' value='1.0'></label><button class='btn' name='cmd' value='manual_titrant' type='submit'>Run titrant pump</button><button class='btn' name='cmd' value='manual_sample' type='submit'>Run sample pump</button><button class='btn danger' name='cmd' value='manual_stop' type='submit'>Stop pumps</button></form><p class='tiny'>Manual pump actions are blocked while titration or calibration is active. Use seconds here for priming tubing and experiment preparation.</p></div></section>");
+
+  page += F("<section id='tab-admin' class='panel'><div class='split'><div><form action='/set' method='get' class='card'><h2>Settings</h2><div class='row'>");
   page += F("<label>Mode<select name='mode'><option value='base'");
   if (settings.mode == TitrationMode::AddBase) page += F(" selected");
   page += F(">Add base</option><option value='acid'");
@@ -1083,8 +1162,8 @@ String htmlPage() {
   page += F("' placeholder='Leave empty for AP only'></label>");
   page += F("<label>Password<input name='wifi_password' type='password' maxlength='64' placeholder='Leave blank to keep'></label>");
   page += F("</div><p class='tiny'>AP stays on. Blank SSID disables STA. Changing WiFi restarts the controller.</p>");
-  page += F("<button class='primary' type='submit'>Save WiFi</button></form></div>");
-  page += F("</section><script>");
+  page += F("<button class='primary' type='submit'>Save WiFi</button></form></div></div></section>");
+  page += F("<script>");
   page += F("function text(id,v){var e=document.getElementById(id);if(e)e.textContent=v}");
   page += F("function html(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v}");
   page += F("async function poll(){try{let r=await fetch('/json',{cache:'no-store'});let d=await r.json();");
@@ -1102,12 +1181,25 @@ String htmlPage() {
   page += F("let f=document.querySelector('.fill');if(f)f.style.width=Math.max(0,Math.min(100,used/max*100))+'%';");
   page += F("text('titrantgps',Number(d.titrant_gps).toFixed(3));text('samplegps',Number(d.sample_gps).toFixed(3));");
   page += F("}catch(e){}}setInterval(poll,2000);");
+  page += F("function activateTab(name){var p=document.getElementById('tab-'+name);if(!p)return;document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.tab===name)});document.querySelectorAll('.panel').forEach(function(x){x.classList.remove('active')});p.classList.add('active')}");
+  page += F("document.querySelectorAll('.tab').forEach(function(b){b.onclick=function(){activateTab(b.dataset.tab);location.hash=b.dataset.tab}});var initial=(location.hash||'#run').slice(1);activateTab(initial);");
+  page += F("var mf=document.getElementById('manualForm');if(mf)mf.addEventListener('submit',async function(e){e.preventDefault();var fd=new FormData(mf);var cmd=e.submitter&&e.submitter.name?e.submitter.value:fd.get('cmd');fd.set('cmd',cmd);fd.set('ajax','1');try{await fetch('/action?'+new URLSearchParams(fd).toString(),{cache:'no-store'});poll()}catch(err){}});");
   page += F("</script></main></body></html>");
   return page;
 }
 
 void redirectHome() {
   server.sendHeader("Location", "/", true);
+  server.send(302, "text/plain", "");
+}
+
+void redirectHomeTab(const char *tab) {
+  String location = "/";
+  if (tab != nullptr && tab[0] != '\0') {
+    location += "#";
+    location += tab;
+  }
+  server.sendHeader("Location", location, true);
   server.send(302, "text/plain", "");
 }
 
@@ -1143,6 +1235,57 @@ void handleSet() {
     settings.titrantMolarity = constrain(server.arg("titrant_m").toFloat(), 0.0001f, 10.0f);
   }
 
+  bool calibrationChanged = false;
+  if (server.hasArg("low_ph")) {
+    phCalibration.lowPh = constrain(server.arg("low_ph").toFloat(), 0.0f, 14.0f);
+    calibrationChanged = true;
+  }
+  if (server.hasArg("low_probe_mv")) {
+    phCalibration.lowProbeMillivolts = constrain(server.arg("low_probe_mv").toFloat(), -1000.0f, 1000.0f);
+    calibrationChanged = true;
+  }
+  if (server.hasArg("low_ads_mv")) {
+    phCalibration.lowAdsMillivolts = constrain(server.arg("low_ads_mv").toFloat(), -4096.0f, 4096.0f);
+    calibrationChanged = true;
+  }
+  if (server.hasArg("high_ph")) {
+    phCalibration.highPh = constrain(server.arg("high_ph").toFloat(), 0.0f, 14.0f);
+    calibrationChanged = true;
+  }
+  if (server.hasArg("high_probe_mv")) {
+    phCalibration.highProbeMillivolts = constrain(server.arg("high_probe_mv").toFloat(), -1000.0f, 1000.0f);
+    calibrationChanged = true;
+  }
+  if (server.hasArg("high_ads_mv")) {
+    phCalibration.highAdsMillivolts = constrain(server.arg("high_ads_mv").toFloat(), -4096.0f, 4096.0f);
+    calibrationChanged = true;
+  }
+  if (server.hasArg("titrant_gps")) {
+    titrantPumpFlowRateGps = constrain(server.arg("titrant_gps").toFloat(), 0.0f, 100.0f);
+    calibrationChanged = true;
+  }
+  if (server.hasArg("sample_gps")) {
+    samplePumpFlowRateGps = constrain(server.arg("sample_gps").toFloat(), 0.0f, 100.0f);
+    calibrationChanged = true;
+  }
+  if (server.hasArg("scale_factor")) {
+    scaleSensor.setCalibrationFactor(constrain(server.arg("scale_factor").toFloat(), 1.0f, 100000.0f));
+    calibrationChanged = true;
+  }
+  if (calibrationChanged) {
+    if (absoluteFloat(phCalibration.highProbeMillivolts - phCalibration.lowProbeMillivolts) > 0.01f &&
+        absoluteFloat(phCalibration.highAdsMillivolts - phCalibration.lowAdsMillivolts) > 0.01f) {
+      saveCalibration();
+      phFilter.reset();
+      phReady = false;
+    } else {
+      statusLine = "Bad calibration span";
+      displayDirty = true;
+      redirectHome();
+      return;
+    }
+  }
+
   if (server.hasArg("ssid")) {
     String nextSsid = server.arg("ssid");
     nextSsid.trim();
@@ -1159,9 +1302,9 @@ void handleSet() {
     }
   }
 
-  statusLine = wifiChanged ? "WiFi saved" : "Settings saved";
+  statusLine = wifiChanged ? "WiFi saved" : (calibrationChanged ? "Calibration saved" : "Settings saved");
   displayDirty = true;
-  redirectHome();
+  redirectHomeTab(calibrationChanged ? "cal" : "admin");
   if (wifiChanged) {
     pump.stop();
     samplePump.stop();
@@ -1170,7 +1313,12 @@ void handleSet() {
 }
 
 void handleAction() {
+  updatePumpTimeouts();
   String cmd = server.arg("cmd");
+  float manualSeconds = server.hasArg("sec") ? server.arg("sec").toFloat() : (server.arg("ms").toFloat() / 1000.0f);
+  manualSeconds = constrain(manualSeconds, 0.1f, 30.0f);
+  uint16_t manualMs = (uint16_t)(manualSeconds * 1000.0f + 0.5f);
+  const char *returnTab = "run";
   if (cmd == "start") {
     if (state == RunState::Paused) {
       resumeTitration();
@@ -1186,12 +1334,73 @@ void handleAction() {
   } else if (cmd == "reset") {
     resetRunData();
     setState(RunState::SetupMode, "Reset");
+  } else if (cmd == "ready") {
+    resetRunData();
+    setState(RunState::SetupReady, "Ready for calibration");
+    returnTab = "cal";
   } else if (cmd == "calibrate") {
+    returnTab = "cal";
     if (state == RunState::SetupReady) {
       setState(RunState::Calibrating, "Calibrating pumps");
+    } else {
+      statusLine = "Enter ready first";
+      displayDirty = true;
     }
+  } else if (cmd == "scale_calibrate") {
+    returnTab = "cal";
+    if (!isActiveState() && state != RunState::Calibrating) {
+      tareScale();
+      statusLine = "Scale calibrated";
+    } else {
+      statusLine = "Enter ready first";
+    }
+    displayDirty = true;
+  } else if (cmd == "ph_signal_calibrate") {
+    returnTab = "cal";
+    if (!isActiveState() && state != RunState::Calibrating) {
+      phFilter.reset();
+      phDynamics.reset();
+      phReady = false;
+      phSampleFresh = false;
+      statusLine = "pH/mV filter reset";
+    } else {
+      statusLine = "Enter ready first";
+    }
+    displayDirty = true;
+  } else if (cmd == "manual_titrant") {
+    returnTab = "manual";
+    if (!isActiveState() && state != RunState::Calibrating) {
+      samplePump.stop();
+      pump.runForMs(manualMs);
+      statusLine = String("Manual titrant ") + String(manualSeconds, 1) + "s";
+      displayDirty = true;
+    }
+  } else if (cmd == "manual_sample") {
+    returnTab = "manual";
+    if (!isActiveState() && state != RunState::Calibrating) {
+      pump.stop();
+      samplePump.runForMs(manualMs);
+      statusLine = String("Manual sample ") + String(manualSeconds, 1) + "s";
+      displayDirty = true;
+    }
+  } else if (cmd == "manual_stop") {
+    returnTab = "manual";
+    pump.stop();
+    samplePump.stop();
+    statusLine = "Manual stop";
+    displayDirty = true;
   }
-  redirectHome();
+  updatePumpTimeouts();
+  if (server.hasArg("ajax")) {
+    String json = "{\"ok\":true,\"tab\":\"";
+    json += returnTab;
+    json += "\",\"status\":\"";
+    json += jsonEscape(statusLine);
+    json += "\"}";
+    server.send(200, "application/json", json);
+    return;
+  }
+  redirectHomeTab(returnTab);
 }
 
 void handleJson() {
@@ -1227,6 +1436,13 @@ void handleJson() {
   json += ",\"ota\":" + String(otaReady ? "true" : "false");
   json += ",\"titrant_gps\":" + String(titrantPumpFlowRateGps, 4);
   json += ",\"sample_gps\":" + String(samplePumpFlowRateGps, 4);
+  json += ",\"scale_factor\":" + String(scaleSensor.calibrationFactor(), 2);
+  json += ",\"low_ph\":" + String(phCalibration.lowPh, 2);
+  json += ",\"low_probe_mv\":" + String(phCalibration.lowProbeMillivolts, 1);
+  json += ",\"low_ads_mv\":" + String(phCalibration.lowAdsMillivolts, 1);
+  json += ",\"high_ph\":" + String(phCalibration.highPh, 2);
+  json += ",\"high_probe_mv\":" + String(phCalibration.highProbeMillivolts, 1);
+  json += ",\"high_ads_mv\":" + String(phCalibration.highAdsMillivolts, 1);
   json += "}";
   server.send(200, "application/json", json);
 }
@@ -1350,8 +1566,7 @@ void updateNetworkStatus() {
 }
 
 void runCalibration() {
-  pump.update();
-  samplePump.update();
+  updatePumpTimeouts();
 
   static uint32_t calStartMs = 0;
   static int calPhase = 0;
@@ -1375,28 +1590,30 @@ void runCalibration() {
 
   uint32_t elapsed = millis() - calStartMs;
 
-  if (calPhase == 1 && elapsed >= 2000) {
-    pump.runForMs(2000);
+  if (calPhase == 1 && elapsed >= CALIBRATION_PREP_MS) {
+    pump.runForMs(CALIBRATION_PUMP_RUN_MS);
     calPhase = 2;
     statusLine = "Calib: titrant 2s";
     displayDirty = true;
     return;
   }
 
-  if (calPhase == 2 && !pump.isRunning() && elapsed >= 6000) {
+  if (calPhase == 2 && !pump.isRunning() &&
+      elapsed >= CALIBRATION_PREP_MS + CALIBRATION_PUMP_RUN_MS + CALIBRATION_SETTLE_MS) {
     float delta = lastScale.grams - calInitialWeight;
-    titrantPumpFlowRateGps = delta / 2.0f;
+    titrantPumpFlowRateGps = delta / (CALIBRATION_PUMP_RUN_MS / 1000.0f);
     calInitialWeight = lastScale.grams;
-    samplePump.runForMs(2000);
+    samplePump.runForMs(CALIBRATION_PUMP_RUN_MS);
     calPhase = 3;
     statusLine = "Calib: sample 2s";
     displayDirty = true;
     return;
   }
 
-  if (calPhase == 3 && !samplePump.isRunning() && elapsed >= 10000) {
+  if (calPhase == 3 && !samplePump.isRunning() &&
+      elapsed >= CALIBRATION_PREP_MS + (CALIBRATION_PUMP_RUN_MS * 2) + (CALIBRATION_SETTLE_MS * 2)) {
     float delta = lastScale.grams - calInitialWeight;
-    samplePumpFlowRateGps = delta / 2.0f;
+    samplePumpFlowRateGps = delta / (CALIBRATION_PUMP_RUN_MS / 1000.0f);
     saveCalibration();
     calPhase = 0;
     setState(RunState::SetupReady, "Calibration done");
@@ -1411,6 +1628,13 @@ void saveCalibration() {
   if (prefs.begin("cal", false)) {
     prefs.putFloat("titrant_gps", titrantPumpFlowRateGps);
     prefs.putFloat("sample_gps", samplePumpFlowRateGps);
+    prefs.putFloat("scale_factor", scaleSensor.calibrationFactor());
+    prefs.putFloat("low_ads_mv", phCalibration.lowAdsMillivolts);
+    prefs.putFloat("low_probe_mv", phCalibration.lowProbeMillivolts);
+    prefs.putFloat("low_ph", phCalibration.lowPh);
+    prefs.putFloat("high_ads_mv", phCalibration.highAdsMillivolts);
+    prefs.putFloat("high_probe_mv", phCalibration.highProbeMillivolts);
+    prefs.putFloat("high_ph", phCalibration.highPh);
     prefs.end();
   }
 }
@@ -1420,6 +1644,13 @@ void loadCalibration() {
   if (prefs.begin("cal", true)) {
     titrantPumpFlowRateGps = prefs.getFloat("titrant_gps", 0.0f);
     samplePumpFlowRateGps = prefs.getFloat("sample_gps", 0.0f);
+    scaleSensor.setCalibrationFactor(prefs.getFloat("scale_factor", scaleSensor.calibrationFactor()));
+    phCalibration.lowAdsMillivolts = prefs.getFloat("low_ads_mv", phCalibration.lowAdsMillivolts);
+    phCalibration.lowProbeMillivolts = prefs.getFloat("low_probe_mv", phCalibration.lowProbeMillivolts);
+    phCalibration.lowPh = prefs.getFloat("low_ph", phCalibration.lowPh);
+    phCalibration.highAdsMillivolts = prefs.getFloat("high_ads_mv", phCalibration.highAdsMillivolts);
+    phCalibration.highProbeMillivolts = prefs.getFloat("high_probe_mv", phCalibration.highProbeMillivolts);
+    phCalibration.highPh = prefs.getFloat("high_ph", phCalibration.highPh);
     prefs.end();
   }
 }
@@ -1503,12 +1734,15 @@ void setup() {
 }
 
 void loop() {
+  updatePumpTimeouts();
   if (otaReady) {
     ArduinoOTA.handle();
   }
+  updatePumpTimeouts();
   if (webReady) {
     server.handleClient();
   }
+  updatePumpTimeouts();
   updateNetworkStatus();
   if (restartPending && millis() - restartAtMs >= RESTART_DELAY_MS) {
     pump.stop();

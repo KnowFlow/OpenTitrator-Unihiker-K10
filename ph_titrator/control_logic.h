@@ -33,7 +33,7 @@ struct TitrationSettings {
   TitrantPreset titrantPreset = TitrantPreset::Naoh001;
   float targetPh = 7.00f;
   float tolerancePh = 0.05f;
-  float maxConsumedGrams = 75.0f;
+  float maxConsumedGrams = 20.0f;
   float sampleGrams = 20.0f;
   float titrantMolarity = 0.01f;
 };
@@ -188,30 +188,72 @@ inline float mapLinear(float value, float inLow, float inHigh, float outLow, flo
   return outLow + ((value - inLow) * (outHigh - outLow)) / (inHigh - inLow);
 }
 
+inline float computeProbeMillivoltsFromAdsInput(
+    float adsInputMillivolts,
+    float lowAdsInputMillivolts,
+    float lowProbeMillivolts,
+    float highAdsInputMillivolts,
+    float highProbeMillivolts);
+
 inline float computeProbeMillivoltsFromAdsInput(float adsInputMillivolts) {
   constexpr float alkalineAdsInputMillivolts = 1329.3334f;
   constexpr float alkalineProbeMillivolts = -59.0f;
   constexpr float acidAdsInputMillivolts = 2387.3333f;
   constexpr float acidProbeMillivolts = 296.0f;
-  return mapLinear(
+  return computeProbeMillivoltsFromAdsInput(
       adsInputMillivolts,
       alkalineAdsInputMillivolts,
-      acidAdsInputMillivolts,
       alkalineProbeMillivolts,
+      acidAdsInputMillivolts,
       acidProbeMillivolts);
 }
+
+inline float computeProbeMillivoltsFromAdsInput(
+    float adsInputMillivolts,
+    float lowAdsInputMillivolts,
+    float lowProbeMillivolts,
+    float highAdsInputMillivolts,
+    float highProbeMillivolts) {
+  return mapLinear(
+      adsInputMillivolts,
+      lowAdsInputMillivolts,
+      highAdsInputMillivolts,
+      lowProbeMillivolts,
+      highProbeMillivolts);
+}
+
+inline float computePhFromProbeMillivolts(
+    float probeMillivolts,
+    float lowProbeMillivolts,
+    float lowPh,
+    float highProbeMillivolts,
+    float highPh);
 
 inline float computePhFromProbeMillivolts(float probeMillivolts) {
   constexpr float alkalineProbeMillivolts = -58.0f;
   constexpr float alkalinePh = 8.11f;
   constexpr float acidProbeMillivolts = 296.0f;
   constexpr float acidPh = 2.14f;
-  return mapLinear(
+  return computePhFromProbeMillivolts(
       probeMillivolts,
       alkalineProbeMillivolts,
-      acidProbeMillivolts,
       alkalinePh,
+      acidProbeMillivolts,
       acidPh);
+}
+
+inline float computePhFromProbeMillivolts(
+    float probeMillivolts,
+    float lowProbeMillivolts,
+    float lowPh,
+    float highProbeMillivolts,
+    float highPh) {
+  return mapLinear(
+      probeMillivolts,
+      lowProbeMillivolts,
+      highProbeMillivolts,
+      lowPh,
+      highPh);
 }
 
 inline float clampFloat(float value, float low, float high) {
