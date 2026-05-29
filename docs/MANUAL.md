@@ -182,8 +182,8 @@ Calibration measures how many grams each pump delivers per second. This is saved
 2. Screen shows `STATE CALIB` and `Calib: place bottle + tare`.
 3. Place an empty collection vessel on the scale. The scale is tared automatically at the start of calibration.
 4. After 2 seconds, the **titrant pump** runs for 2 seconds.
-5. After a 4-second settle, the **sample pump** runs for 2 seconds.
-6. After another 4-second settle, the flow rates are calculated and saved.
+5. After a 5-second settle, the **sample pump** runs for 2 seconds.
+6. After another 5-second settle, the flow rates are calculated and saved.
 7. The controller returns to **SetupReady** with status `Calibration done`.
 
 **To cancel calibration early**: press **A**, **B**, or **AB short** during calibration.
@@ -216,8 +216,8 @@ Once pH is stable, the state changes to **Running** and the titration loop begin
 The controller repeatedly cycles through:
 
 1. **Running** — reads pH, decides pulse size using `decideAdaptiveDose`.
-2. **Dosing** — runs the titrant pump for the pulse duration (30–600 ms).
-3. **Settling** — waits (2–8 s) for the reaction to equilibrate.
+2. **Dosing** — runs the titrant pump for the pulse duration (25–300 ms).
+3. **Settling** — waits (6–15 s) for mixing and electrode response.
 
 **You can**:
 - Press **AB short** to **pause**.
@@ -343,11 +343,13 @@ if invalid pH → Error
 if mass limit reached → Error
 if already at target (±0.05) → Done
 if overshooting (dpH/dt steep and crossed target) → Done
-if steep slope (|dpH/dt| > 0.08) → 30 ms pulse, 8 s settle
-else if error > 1.0 → 600 ms pulse, 2 s settle
-else if error > 0.3 → 200 ms pulse, 3.5 s settle
-else → 80 ms pulse, 5 s settle
+if steep slope (|dpH/dt| > 0.08) → 25 ms pulse, 15 s settle
+else if error > 1.0 → 300 ms pulse, 6 s settle
+else if error > 0.3 → 100 ms pulse, 10 s settle
+else → 40 ms pulse, 15 s settle
 ```
+
+The controller uses the settle interval returned by each dose decision before returning to **Running**. This slower cadence gives the reactor and pH electrode enough time to respond, reducing overshoot near the endpoint.
 
 ### 11.4 Calibration Math
 

@@ -42,7 +42,7 @@ struct TitrationDecision {
   TitrationAction action = TitrationAction::Done;
   TitrationStopReason reason = TitrationStopReason::None;
   uint16_t pumpPulseMs = 0;
-  uint16_t settleMs = 3500;
+  uint16_t settleMs = 10000;
 };
 
 struct PhFilter {
@@ -324,20 +324,20 @@ inline TitrationDecision decideAdaptiveDose(
   const bool steep = dyn.isSteep();
   if (steep) {
     d.action = TitrationAction::Dose;
-    d.pumpPulseMs = 30;
-    d.settleMs = 8000;
+    d.pumpPulseMs = 25;
+    d.settleMs = 15000;
   } else if (error > 1.0f) {
     d.action = TitrationAction::Dose;
-    d.pumpPulseMs = 600;
-    d.settleMs = 2000;
+    d.pumpPulseMs = 300;
+    d.settleMs = 6000;
   } else if (error > 0.3f) {
     d.action = TitrationAction::Dose;
-    d.pumpPulseMs = 200;
-    d.settleMs = 3500;
+    d.pumpPulseMs = 100;
+    d.settleMs = 10000;
   } else {
     d.action = TitrationAction::Dose;
-    d.pumpPulseMs = 80;
-    d.settleMs = 5000;
+    d.pumpPulseMs = 40;
+    d.settleMs = 15000;
   }
   return d;
 }

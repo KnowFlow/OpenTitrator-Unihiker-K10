@@ -904,7 +904,8 @@ void runController() {
     return;
   }
 
-  if (state == RunState::Settling && millis() - stateStartedMs >= SETTLING_TIME_MS) {
+  uint16_t settleMs = activeSettleMs > 0 ? activeSettleMs : SETTLING_TIME_MS;
+  if (state == RunState::Settling && millis() - stateStartedMs >= settleMs) {
     setState(RunState::Running, "Checking");
     return;
   }

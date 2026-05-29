@@ -43,16 +43,16 @@ The S-shaped curve above illustrates why pulse dosing works: near the steep equi
 
 | Zone | pH error | Pulse | Settle | Purpose |
 |------|----------|-------|--------|---------|
-| Steep | `|dpH/dt| > 0.08` | 30 ms | 8 s | Near equivalence point, prevent overshoot |
-| Far | `> 1.0` | 600 ms | 2 s | Fast approach |
-| Medium | `0.3 – 1.0` | 200 ms | 3.5 s | Controlled approach |
-| Near | `≤ 0.3` | 80 ms | 5 s | Fine-tuning |
+| Steep | `|dpH/dt| > 0.08` | 25 ms | 15 s | Near equivalence point, prevent overshoot |
+| Far | `> 1.0` | 300 ms | 6 s | Conservative approach |
+| Medium | `0.3 – 1.0` | 100 ms | 10 s | Controlled approach |
+| Near | `≤ 0.3` | 40 ms | 15 s | Fine-tuning |
 | Deadband | `≤ 0.05` | — | — | Stop, target reached |
 
-A `TitrationDynamics` tracker watches `dpH/dt` and halts immediately if the curve shows overshoot.
+A `TitrationDynamics` tracker watches `dpH/dt` and halts immediately if the curve shows overshoot. Each dose decision also carries its own settling interval, so the controller waits long enough for mixing and electrode response before reading pH again.
 
 ### Automatic Pump Calibration
-From **SetupReady**, press **B** to enter calibration. The controller runs each pump for exactly 2 seconds, measures the weight change on the scale, computes the flow rate (g/s), and saves it to ESP32 Preferences.
+From **SetupReady**, press **B** to enter calibration. The controller runs each pump for exactly 2 seconds, waits 5 seconds after each pump stops, measures the weight change on the scale, computes the flow rate (g/s), and saves it to ESP32 Preferences.
 
 ### Network & Remote Control
 - **AP mode** is always on (`K10-pH-Titrator` / `12345678`).

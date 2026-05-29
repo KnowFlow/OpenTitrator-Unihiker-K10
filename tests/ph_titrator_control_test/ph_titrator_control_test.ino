@@ -87,24 +87,24 @@ void setup() {
   {
     TitrationDecision d = decideAdaptiveDose(settings, 5.80f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "far error doses");
-    expectEqual(d.pumpPulseMs, 600, "far error uses 600ms pulse");
-    expectEqual(d.settleMs, 2000, "far error uses 2s settle");
+    expectEqual(d.pumpPulseMs, 300, "far error uses 300ms pulse");
+    expectEqual(d.settleMs, 6000, "far error uses 6s settle");
   }
 
   // Medium error -> medium pulse
   {
     TitrationDecision d = decideAdaptiveDose(settings, 6.55f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "medium error doses");
-    expectEqual(d.pumpPulseMs, 200, "medium error uses 200ms pulse");
-    expectEqual(d.settleMs, 3500, "medium error uses 3.5s settle");
+    expectEqual(d.pumpPulseMs, 100, "medium error uses 100ms pulse");
+    expectEqual(d.settleMs, 10000, "medium error uses 10s settle");
   }
 
   // Near error -> small pulse
   {
     TitrationDecision d = decideAdaptiveDose(settings, 6.82f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "near error doses");
-    expectEqual(d.pumpPulseMs, 80, "near error uses 80ms pulse");
-    expectEqual(d.settleMs, 5000, "near error uses 5s settle");
+    expectEqual(d.pumpPulseMs, 40, "near error uses 40ms pulse");
+    expectEqual(d.settleMs, 15000, "near error uses 15s settle");
   }
 
   // Steep slope -> micro pulse
@@ -114,8 +114,8 @@ void setup() {
     dyn.add(7.50f, 1000); // dpH/dt = 1.0 > 0.08
     TitrationDecision d = decideAdaptiveDose(settings, 6.82f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "steep slope doses");
-    expectEqual(d.pumpPulseMs, 30, "steep slope uses 30ms pulse");
-    expectEqual(d.settleMs, 8000, "steep slope uses 8s settle");
+    expectEqual(d.pumpPulseMs, 25, "steep slope uses 25ms pulse");
+    expectEqual(d.settleMs, 15000, "steep slope uses 15s settle");
   }
   dyn.reset();
 
@@ -124,7 +124,7 @@ void setup() {
     settings.mode = TitrationMode::AddAcid;
     TitrationDecision d = decideAdaptiveDose(settings, 8.40f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "acid mode doses above target");
-    expectEqual(d.pumpPulseMs, 600, "acid far error uses 600ms pulse");
+    expectEqual(d.pumpPulseMs, 300, "acid far error uses 300ms pulse");
   }
 
   // Acid mode: near target -> stop
