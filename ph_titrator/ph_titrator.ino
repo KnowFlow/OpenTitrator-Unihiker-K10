@@ -396,6 +396,7 @@ bool webReady = false;
 bool otaReady = false;
 bool restartPending = false;
 uint32_t restartAtMs = 0;
+bool calibrationNeedsReset = false;
 String statusLine = "Booting";
 String networkLabel = "AP";
 String ipAddress = "0.0.0.0";
@@ -635,6 +636,12 @@ ButtonEvent readButtons() {
   bool a = k10.buttonA->isPressed();
   bool b = k10.buttonB->isPressed();
 
+  // K10 hardware: AB can falsely trigger when only A or B is pressed.
+  // Only treat as AB combo when both A and B are actually pressed.
+  if (ab && !(a && b)) {
+    ab = false;
+  }
+
   if (ab && !wasAB) {
     abPressedAt = millis();
     longSent = false;
@@ -714,6 +721,7 @@ void handleButton(ButtonEvent event) {
     case RunState::Calibrating:
       pump.stop();
       samplePump.stop();
+      calibrationNeedsReset = true;
       setState(RunState::SetupReady, "Calib cancelled");
       break;
 
@@ -1018,6 +1026,7 @@ String htmlPage() {
   page += state == RunState::Paused ? F("<a class='btn primary' href='/action?cmd=start'>Resume</a>") : F("<a class='btn primary' href='/action?cmd=start'>Start</a>");
   page += F("<a class='btn' href='/action?cmd=stop'>Pause</a>");
   page += F("<a class='btn' href='/action?cmd=tare'>Tare scale</a>");
+  page += F("<a class='btn' href='/action?cmd=calibrate'>Calibrate pumps</a>");
   page += F("<a class='btn ghost' href='/action?cmd=reset'>Reset</a>");
   page += F("<a class='btn danger' href='/action?cmd=panic'>Emergency stop</a>");
   page += F("</div><p class='tiny'>ADC ");
@@ -1062,7 +1071,11 @@ String htmlPage() {
   page += htmlEscape(titrantLabel());
   page += F("</span> / result <span id='resultm'>");
   page += String(resultConcentrationM, 5);
-  page += F("</span> mol/L</p><button class='primary' type='submit'>Save settings</button></form>");
+  page += F("</span> mol/L</p><p class='tiny'>Titrant flow <span id='titrantgps'>");
+  page += String(titrantPumpFlowRateGps, 3);
+  page += F("</span> g/s / Sample flow <span id='samplegps'>");
+  page += String(samplePumpFlowRateGps, 3);
+  page += F("</span> g/s</p><button class='primary' type='submit'>Save settings</button></form>");
 
   page += F("<form action='/set' method='get' class='card' style='margin-top:10px'><h2>WiFi</h2><div class='row'>");
   page += F("<label>SSID<input name='ssid' maxlength='32' value='");
@@ -1087,6 +1100,7 @@ String htmlPage() {
   page += F("html('network','<span>'+d.network+'</span><span>AP '+d.ap_ip+'</span><span>STA '+d.sta_ip+'</span><span>OTA '+(d.ota?'ON':'OFF')+'</span>');");
   page += F("text('netdetail','AP '+d.ap_ip+' / STA '+d.sta_ip+' / OTA host k10-ph-titrator');");
   page += F("let f=document.querySelector('.fill');if(f)f.style.width=Math.max(0,Math.min(100,used/max*100))+'%';");
+  page += F("text('titrantgps',Number(d.titrant_gps).toFixed(3));text('samplegps',Number(d.sample_gps).toFixed(3));");
   page += F("}catch(e){}}setInterval(poll,2000);");
   page += F("</script></main></body></html>");
   return page;
@@ -1172,6 +1186,10 @@ void handleAction() {
   } else if (cmd == "reset") {
     resetRunData();
     setState(RunState::SetupMode, "Reset");
+  } else if (cmd == "calibrate") {
+    if (state == RunState::SetupReady) {
+      setState(RunState::Calibrating, "Calibrating pumps");
+    }
   }
   redirectHome();
 }
@@ -1207,6 +1225,8 @@ void handleJson() {
   json += ",\"sta_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false");
   json += ",\"wifi_ssid\":\"" + jsonEscape(wifiSsid) + "\"";
   json += ",\"ota\":" + String(otaReady ? "true" : "false");
+  json += ",\"titrant_gps\":" + String(titrantPumpFlowRateGps, 4);
+  json += ",\"sample_gps\":" + String(samplePumpFlowRateGps, 4);
   json += "}";
   server.send(200, "application/json", json);
 }
@@ -1330,9 +1350,17 @@ void updateNetworkStatus() {
 }
 
 void runCalibration() {
+  pump.update();
+  samplePump.update();
+
   static uint32_t calStartMs = 0;
   static int calPhase = 0;
   static float calInitialWeight = 0.0f;
+
+  if (calibrationNeedsReset) {
+    calPhase = 0;
+    calibrationNeedsReset = false;
+  }
 
   if (calPhase == 0) {
     calPhase = 1;
