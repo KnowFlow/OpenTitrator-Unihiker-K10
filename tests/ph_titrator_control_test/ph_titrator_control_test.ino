@@ -119,6 +119,19 @@ void setup() {
   }
   dyn.reset();
 
+  // Near target and still drifting upward -> preemptive stop
+  {
+    dyn.reset();
+    dyn.add(9.43f, 0);
+    dyn.add(9.44f, 2000);
+    settings.targetPh = 9.50f;
+    TitrationDecision d = decideAdaptiveDose(settings, 9.44f, 12.0f, dyn);
+    expectTrue(d.action == TitrationAction::Done, "base near target and rising stops early");
+    expectTrue(d.reason == TitrationStopReason::TargetReached, "base predictive stop reason is TargetReached");
+    settings.targetPh = 7.00f;
+  }
+  dyn.reset();
+
   // Acid mode: far above target -> large dose
   {
     settings.mode = TitrationMode::AddAcid;
@@ -129,9 +142,22 @@ void setup() {
 
   // Acid mode: near target -> stop
   {
+    dyn.reset();
     TitrationDecision d = decideAdaptiveDose(settings, 7.03f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Done, "acid near target stops");
     expectTrue(d.reason == TitrationStopReason::TargetReached, "acid near target reason is TargetReached");
+  }
+
+  // Acid mode near target and drifting downward -> preemptive stop
+  {
+    dyn.reset();
+    dyn.add(7.57f, 0);
+    dyn.add(7.56f, 2000);
+    settings.targetPh = 7.50f;
+    TitrationDecision d = decideAdaptiveDose(settings, 7.56f, 12.0f, dyn);
+    expectTrue(d.action == TitrationAction::Done, "acid near target and falling stops early");
+    expectTrue(d.reason == TitrationStopReason::TargetReached, "acid predictive stop reason is TargetReached");
+    settings.targetPh = 7.00f;
   }
 
   settings.mode = TitrationMode::AddBase;

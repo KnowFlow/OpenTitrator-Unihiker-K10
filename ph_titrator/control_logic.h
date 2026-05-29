@@ -325,6 +325,16 @@ inline TitrationDecision decideAdaptiveDose(
     return d;
   }
 
+  const float slope = dyn.dpH_dt();
+  const bool driftingTowardTarget =
+      (settings.mode == TitrationMode::AddBase && slope > 0.001f) ||
+      (settings.mode == TitrationMode::AddAcid && slope < -0.001f);
+  if (error <= 0.10f && driftingTowardTarget) {
+    d.action = TitrationAction::Done;
+    d.reason = TitrationStopReason::TargetReached;
+    return d;
+  }
+
   const bool steep = dyn.isSteep();
   if (steep) {
     d.action = TitrationAction::Dose;
