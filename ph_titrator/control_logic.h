@@ -131,6 +131,10 @@ struct TitrationDynamics {
     return absoluteFloat(dpH_dt()) > 0.08f;
   }
 
+  bool isSettled(float maxAbsDpHPerSecond = 0.005f) const {
+    return count >= 3 && absoluteFloat(dpH_dt()) <= maxAbsDpHPerSecond;
+  }
+
   bool isOvershooting(TitrationMode mode, float target) const {
     if (count < 2) {
       return false;

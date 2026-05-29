@@ -164,13 +164,19 @@ void setup() {
   {
     TitrationDynamics d;
     expectTrue(!d.isSteep(), "empty dynamics is not steep");
+    expectTrue(!d.isSettled(), "empty dynamics is not settled");
     d.add(6.0f, 0);
     d.add(6.05f, 1000);
     expectTrue(!d.isSteep(), "gentle slope is not steep");
+    expectTrue(!d.isSettled(), "two samples are not settled");
+    d.add(6.054f, 2000);
+    expectTrue(d.isSettled(), "stable response is settled");
     d.reset();
     d.add(6.0f, 0);
     d.add(6.1f, 1000);
     expectTrue(d.isSteep(), "steep slope detected");
+    d.add(6.3f, 2000);
+    expectTrue(!d.isSettled(), "moving response is not settled");
   }
 
   if (failures == 0) {

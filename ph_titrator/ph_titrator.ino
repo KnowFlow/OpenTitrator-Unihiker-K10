@@ -34,6 +34,7 @@ const int PUMP_STOP_US = 1500;
 const int PUMP_DOSE_US = 1000;
 const uint32_t SAMPLE_INTERVAL_MS = 2000;
 const uint32_t SETTLING_TIME_MS = 5000;
+const uint32_t MAX_SETTLING_TIME_MS = 60000;
 const uint32_t PUMP_DUTY_CYCLE_MS = 5000;
 const uint32_t FINE_PULSE_RUN_MS = 500;
 const uint32_t CALIBRATION_PREP_MS = 2000;
@@ -904,14 +905,19 @@ void runController() {
     return;
   }
 
-  uint16_t settleMs = activeSettleMs > 0 ? activeSettleMs : SETTLING_TIME_MS;
-  if (state == RunState::Settling && millis() - stateStartedMs >= settleMs) {
-    setState(RunState::Running, "Checking");
-    return;
-  }
-
   if (state == RunState::Settling) {
     pump.stop();
+    uint32_t elapsed = millis() - stateStartedMs;
+    uint16_t settleMs = activeSettleMs > 0 ? activeSettleMs : SETTLING_TIME_MS;
+    if (elapsed < settleMs) {
+      return;
+    }
+    if (elapsed < MAX_SETTLING_TIME_MS && (!phSampleFresh || !phDynamics.isSettled())) {
+      statusLine = "Settling pH";
+      displayDirty = true;
+      return;
+    }
+    setState(RunState::Running, "Checking");
     return;
   }
 
