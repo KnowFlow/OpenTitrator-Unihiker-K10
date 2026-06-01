@@ -41,6 +41,11 @@ const uint32_t CALIBRATION_PREP_MS = 2000;
 const uint32_t CALIBRATION_PUMP_RUN_MS = 2000;
 const uint32_t CALIBRATION_SETTLE_MS = 5000;
 const uint8_t SENSOR_FAULT_LIMIT = 10;
+const uint8_t SCALE_FILTER_WINDOW = 5;
+const float SCALE_ACTIVE_JUMP_LIMIT_G = 4.0f;
+const float SCALE_IDLE_JUMP_LIMIT_G = 2.0f;
+const float SCALE_IDLE_ACCEPT_STABILITY_G = 0.8f;
+const uint8_t SCALE_IDLE_ACCEPT_COUNT = 3;
 
 const char *AP_SSID = "K10-pH-Titrator";
 const char *AP_PASSWORD = "12345678";
@@ -90,6 +95,9 @@ struct PhReading {
 
 struct ScaleReading {
   float grams = 0.0f;
+  float rawGrams = 0.0f;
+  bool filtered = false;
+  bool rejected = false;
   bool ok = false;
 };
 
@@ -257,6 +265,7 @@ public:
     }
 
     reading.grams = ((float)value - (float)offset) / calibration;
+    reading.rawGrams = reading.grams;
     reading.ok = true;
     return reading;
   }
@@ -346,6 +355,125 @@ private:
   }
 };
 
+class ScaleFilter {
+public:
+  void reset() {
+    count = 0;
+    idx = 0;
+    filteredGrams = 0.0f;
+    pendingJumpGrams = 0.0f;
+    pendingJumpCount = 0;
+    hasFiltered = false;
+    rejected = false;
+  }
+
+  void reset(float grams) {
+    reset();
+    buffer[0] = grams;
+    count = 1;
+    idx = 1;
+    filteredGrams = grams;
+    hasFiltered = true;
+  }
+
+  ScaleReading apply(const ScaleReading &raw, bool active) {
+    ScaleReading out = raw;
+    if (!raw.ok) {
+      return out;
+    }
+
+    out.rawGrams = raw.grams;
+    rejected = false;
+    if (hasFiltered) {
+      float jumpLimit = active ? SCALE_ACTIVE_JUMP_LIMIT_G : SCALE_IDLE_JUMP_LIMIT_G;
+      if (absoluteFloat(raw.grams - filteredGrams) > jumpLimit) {
+        if (!active && acceptIdleJump(raw.grams)) {
+          reset(raw.grams);
+          out.grams = filteredGrams;
+          out.filtered = true;
+          out.rejected = false;
+          out.ok = true;
+          return out;
+        }
+        rejected = true;
+        out.grams = filteredGrams;
+        out.filtered = true;
+        out.rejected = true;
+        out.ok = true;
+        return out;
+      }
+    }
+
+    pendingJumpGrams = 0.0f;
+    pendingJumpCount = 0;
+    buffer[idx] = raw.grams;
+    idx = (idx + 1) % SCALE_FILTER_WINDOW;
+    if (count < SCALE_FILTER_WINDOW) {
+      count++;
+    }
+
+    filteredGrams = trimmedMean();
+    hasFiltered = true;
+    out.grams = filteredGrams;
+    out.filtered = true;
+    out.rejected = false;
+    return out;
+  }
+
+  bool rejectedLast() const {
+    return rejected;
+  }
+
+private:
+  float buffer[SCALE_FILTER_WINDOW] = {};
+  uint8_t count = 0;
+  uint8_t idx = 0;
+  float filteredGrams = 0.0f;
+  float pendingJumpGrams = 0.0f;
+  uint8_t pendingJumpCount = 0;
+  bool hasFiltered = false;
+  bool rejected = false;
+
+  bool acceptIdleJump(float grams) {
+    if (pendingJumpCount == 0 || absoluteFloat(grams - pendingJumpGrams) > SCALE_IDLE_ACCEPT_STABILITY_G) {
+      pendingJumpGrams = grams;
+      pendingJumpCount = 1;
+    } else if (pendingJumpCount < SCALE_IDLE_ACCEPT_COUNT) {
+      pendingJumpCount++;
+      pendingJumpGrams = (pendingJumpGrams + grams) * 0.5f;
+    }
+    return pendingJumpCount >= SCALE_IDLE_ACCEPT_COUNT;
+  }
+
+  float trimmedMean() const {
+    if (count == 0) {
+      return 0.0f;
+    }
+    float temp[SCALE_FILTER_WINDOW] = {};
+    for (uint8_t i = 0; i < count; i++) {
+      temp[i] = buffer[i];
+    }
+    for (uint8_t i = 1; i < count; i++) {
+      float key = temp[i];
+      int8_t j = i - 1;
+      while (j >= 0 && temp[j] > key) {
+        temp[j + 1] = temp[j];
+        j--;
+      }
+      temp[j + 1] = key;
+    }
+    uint8_t start = count >= 5 ? 1 : 0;
+    uint8_t end = count >= 5 ? count - 1 : count;
+    float sum = 0.0f;
+    uint8_t n = 0;
+    for (uint8_t i = start; i < end; i++) {
+      sum += temp[i];
+      n++;
+    }
+    return n == 0 ? temp[0] : sum / n;
+  }
+};
+
 class PumpController {
 public:
   void begin(Servo &servoRef, int pin) {
@@ -399,6 +527,7 @@ private:
 
 Ads1115PhSensor phSensor;
 ScaleSensor scaleSensor;
+ScaleFilter scaleFilter;
 PumpController pump;
 PumpController samplePump;
 
@@ -513,6 +642,14 @@ String stateText() {
 
 void tareScale() {
   scaleSensor.peel();
+  ScaleReading raw = scaleSensor.read();
+  if (raw.ok) {
+    scaleFilter.reset(raw.grams);
+    lastScale = scaleFilter.apply(raw, false);
+    scaleReady = lastScale.ok;
+  } else {
+    scaleFilter.reset();
+  }
   statusLine = "Tare done";
   displayDirty = true;
 }
@@ -522,6 +659,7 @@ void resetRunData() {
   samplePump.stop();
   phFilter.reset();
   phDynamics.reset();
+  scaleFilter.reset(scaleReady ? lastScale.grams : 0.0f);
   sensorFaultCount = 0;
   sensorFault = false;
   sampleStartWeight = scaleReady ? lastScale.grams : 0.0f;
@@ -548,6 +686,7 @@ bool startTitration() {
   samplePump.stop();
   phFilter.reset();
   phDynamics.reset();
+  scaleFilter.reset(lastScale.grams);
   sensorFaultCount = 0;
   sensorFault = false;
   sampleStartWeight = lastScale.grams;
@@ -854,13 +993,20 @@ void sampleSensors() {
     phReady = false;
   }
 
-  lastScale = scaleSensor.read();
+  ScaleReading rawScale = scaleSensor.read();
+  lastScale = scaleFilter.apply(rawScale, isActiveState());
   scaleReady = lastScale.ok;
   if (scaleReady) {
     if (state == RunState::SampleFilling) {
-      sampleDeliveredGrams = computeSampleGainGrams(sampleStartWeight, lastScale.grams);
+      float delivered = computeSampleGainGrams(sampleStartWeight, lastScale.grams);
+      if (delivered > sampleDeliveredGrams) {
+        sampleDeliveredGrams = delivered;
+      }
     }
-    consumedGrams = computeSampleGainGrams(initialBottleWeight, lastScale.grams);
+    float consumed = computeSampleGainGrams(initialBottleWeight, lastScale.grams);
+    if (consumed > consumedGrams) {
+      consumedGrams = consumed;
+    }
   }
   displayDirty = true;
 }
@@ -882,6 +1028,7 @@ void runController() {
       phFilter.reset();
       phReady = false;
       initialBottleWeight = lastScale.grams;
+      scaleFilter.reset(lastScale.grams);
       consumedGrams = 0.0f;
       setState(RunState::FilterWarmup, "Stabilizing pH");
     } else {
@@ -1423,6 +1570,7 @@ void handleJson() {
   json += ",\"ph\":" + String(lastPh.adcOk ? lastPh.ph : -1.0f, 2);
   json += ",\"mv\":" + String(lastPh.adcOk ? lastPh.millivolts : -1.0f, 0);
   json += ",\"bottle_g\":" + String(scaleReady ? lastScale.grams : -1.0f, 1);
+  json += ",\"raw_bottle_g\":" + String(scaleReady ? lastScale.rawGrams : -1.0f, 1);
   json += ",\"used_g\":" + String(consumedGrams, 1);
   json += ",\"sample_g\":" + String(settings.sampleGrams, 1);
   json += ",\"sample_delivered_g\":" + String(sampleDeliveredGrams, 1);
@@ -1449,6 +1597,8 @@ void handleJson() {
   json += ",\"titrant_gps\":" + String(titrantPumpFlowRateGps, 4);
   json += ",\"sample_gps\":" + String(samplePumpFlowRateGps, 4);
   json += ",\"scale_factor\":" + String(scaleSensor.calibrationFactor(), 2);
+  json += ",\"scale_filtered\":" + String(lastScale.filtered ? "true" : "false");
+  json += ",\"scale_rejected\":" + String(lastScale.rejected ? "true" : "false");
   json += ",\"low_ph\":" + String(phCalibration.lowPh, 2);
   json += ",\"low_probe_mv\":" + String(phCalibration.lowProbeMillivolts, 1);
   json += ",\"low_ads_mv\":" + String(phCalibration.lowAdsMillivolts, 1);
@@ -1592,6 +1742,7 @@ void runCalibration() {
   if (calPhase == 0) {
     calPhase = 1;
     calStartMs = millis();
+    scaleFilter.reset(lastScale.grams);
     calInitialWeight = lastScale.grams;
     pump.stop();
     samplePump.stop();
@@ -1739,7 +1890,10 @@ void setup() {
     setState(RunState::Error, "Check I2C");
   } else {
     lastPh = phSensor.read();
-    lastScale = scaleSensor.read();
+    ScaleReading rawScale = scaleSensor.read();
+    scaleFilter.reset(rawScale.ok ? rawScale.grams : 0.0f);
+    lastScale = scaleFilter.apply(rawScale, false);
+    scaleReady = lastScale.ok;
     initialBottleWeight = lastScale.grams;
     setState(RunState::SetupMode, "Ready");
   }
