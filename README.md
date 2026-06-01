@@ -1,4 +1,4 @@
-# K10 pH Titrator
+# Unihiker K10 pH Titrator
 
 [中文](README_CN.md) · [User Manual](docs/MANUAL.md) · [使用说明书](docs/MANUAL_CN.md)
 
