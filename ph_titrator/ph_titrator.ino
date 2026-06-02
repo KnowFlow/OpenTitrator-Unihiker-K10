@@ -590,14 +590,31 @@ const char *modeText() {
   return settings.mode == TitrationMode::AddBase ? "BASE" : "ACID";
 }
 
+const char *trendText() {
+  return settings.controlTrend == ControlTrend::Increase ? "RISE" : "FALL";
+}
+
 String modeLabel() {
-  return modeText();
+  return trendText();
+}
+
+const char *endpointText() {
+  return settings.endpoint == ControlEndpoint::Millivolts ? "mV" : "pH";
+}
+
+float activeControlValue() {
+  return settings.endpoint == ControlEndpoint::Millivolts ? lastPh.millivolts : lastPh.ph;
+}
+
+float activeControlTarget() {
+  return controlTarget(settings);
 }
 
 String titrantLabel() {
   switch (settings.titrantPreset) {
     case TitrantPreset::Naoh001: return "0.01M NaOH";
     case TitrantPreset::Hcl001: return "0.01M HCl";
+    case TitrantPreset::Edta001: return "0.01M EDTA";
     case TitrantPreset::Manual: return String(settings.titrantMolarity, 4) + "M manual";
   }
   return "Unknown";
@@ -873,19 +890,27 @@ void handleButton(ButtonEvent event) {
   switch (state) {
     case RunState::SetupMode:
       if (event == ButtonEvent::A || event == ButtonEvent::B) {
-        settings.mode = settings.mode == TitrationMode::AddBase ? TitrationMode::AddAcid : TitrationMode::AddBase;
+        settings.controlTrend = settings.controlTrend == ControlTrend::Increase ? ControlTrend::Decrease : ControlTrend::Increase;
         displayDirty = true;
       } else if (event == ButtonEvent::ABShort) {
-        setState(RunState::SetupTarget, "Target pH");
+        setState(RunState::SetupTarget, String("Target ") + endpointText());
       }
       break;
 
     case RunState::SetupTarget:
       if (event == ButtonEvent::A) {
-        settings.targetPh = max(0.0f, settings.targetPh - 0.05f);
+        if (settings.endpoint == ControlEndpoint::Millivolts) {
+          settings.targetMillivolts = max(-1000.0f, settings.targetMillivolts - 5.0f);
+        } else {
+          settings.targetPh = max(0.0f, settings.targetPh - 0.05f);
+        }
         displayDirty = true;
       } else if (event == ButtonEvent::B) {
-        settings.targetPh = min(14.0f, settings.targetPh + 0.05f);
+        if (settings.endpoint == ControlEndpoint::Millivolts) {
+          settings.targetMillivolts = min(1000.0f, settings.targetMillivolts + 5.0f);
+        } else {
+          settings.targetPh = min(14.0f, settings.targetPh + 0.05f);
+        }
         displayDirty = true;
       } else if (event == ButtonEvent::ABShort) {
         setState(RunState::SetupReady, "A tare, AB start");
@@ -983,7 +1008,7 @@ void sampleSensors() {
       phReady = lastPh.ok && !sensorFault;
       phSampleFresh = phReady;
       if (phReady) {
-        phDynamics.add(lastPh.ph, millis());
+        phDynamics.add(activeControlValue(), millis());
       }
     } else {
       phReady = false;
@@ -1064,8 +1089,8 @@ void runController() {
     if (elapsed < settleMs) {
       return;
     }
-    if (elapsed < MAX_SETTLING_TIME_MS && (!phSampleFresh || !phDynamics.isSettled())) {
-      statusLine = "Settling pH";
+    if (elapsed < MAX_SETTLING_TIME_MS && (!phSampleFresh || !phDynamics.isSettled(settings.endpoint))) {
+      statusLine = String("Settling ") + endpointText();
       displayDirty = true;
       return;
     }
@@ -1093,7 +1118,7 @@ void runController() {
   }
 
   TitrationDecision decision = decideAdaptiveDose(
-      settings, lastPh.ph, consumedGrams, phDynamics);
+      settings, activeControlValue(), consumedGrams, phDynamics);
 
   if (decision.action == TitrationAction::Dose) {
     activePulseMs = decision.pumpPulseMs;
@@ -1179,7 +1204,7 @@ String htmlPage() {
   page += F("button,.btn,input,select{font:inherit;border-radius:7px;border:1px solid #3a6472;background:#0a1a21;color:var(--text);padding:10px 12px;text-decoration:none}button,.btn{display:inline-block;cursor:pointer;font-weight:700}.primary{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.danger{background:#351216;border-color:#8c3640;color:#ffd1d1}.ghost{color:var(--blue)}h2{margin:0 0 10px;font-size:16px}.tiny{font-size:12px;color:var(--muted)}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tab{background:#071820;color:var(--blue)}.tab.active{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.panel{display:none}.panel.active{display:block}.full{margin-top:10px}.mini{max-width:170px}@media(max-width:720px){.hero,.split{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.ph{font-size:58px}.top{display:block}.pill{justify-content:flex-start;margin-top:8px}.pill span{border-radius:7px}}</style></head><body><main>");
   page += F("<style>.ph,.v,#status,#mv{font-variant-numeric:tabular-nums}.ph{min-height:72px}.sub{min-height:22px}</style>");
 
-  page += F("<div class='top'><div><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>pH Titrator</div></div><div id='network' class='pill'>");
+  page += F("<div class='top'><div><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>Potentiometric Titrator</div></div><div id='network' class='pill'>");
   page += F("<span>");
   page += htmlEscape(networkLabel);
   page += F("</span><span>AP ");
@@ -1189,14 +1214,31 @@ String htmlPage() {
   page += otaReady ? F("</span><span>OTA ON</span>") : F("</span><span>OTA OFF</span>");
   page += F("</div></div>");
 
-  page += F("<section class='hero'><div><div class='k'>Current pH</div><div id='ph' class='ph ");
+  page += F("<section class='hero'><div><div id='primarylabel' class='k'>Current ");
+  page += endpointText();
+  page += F("</div><div id='ph' class='ph ");
   page += lastPh.adcOk ? (phReady ? F("ok'>") : F("warn'>")) : F("warn'>");
-  page += F("<span id='phvalue'>");
-  page += lastPh.adcOk ? String(lastPh.ph, 2) : F("--.--");
-  page += F("</span><span class='unit'>pH</span></div><div id='mv' class='sub'><span id='mvvalue'>");
-  if (lastPh.adcOk) {
+  page += F("<span id='primaryvalue'>");
+  if (lastPh.adcOk && settings.endpoint == ControlEndpoint::Millivolts) {
+    page += String(lastPh.millivolts, 0);
+  } else if (lastPh.adcOk) {
+    page += String(lastPh.ph, 2);
+  } else if (settings.endpoint == ControlEndpoint::Millivolts) {
+    page += F("--");
+  } else {
+    page += F("--.--");
+  }
+  page += F("</span><span id='primaryunit' class='unit'>");
+  page += endpointText();
+  page += F("</span></div><div id='mv' class='sub'><span id='secondaryvalue'>");
+  if (lastPh.adcOk && settings.endpoint == ControlEndpoint::Millivolts) {
+    page += String(lastPh.ph, 2);
+    page += F("</span> pH from ADS1115 A0");
+  } else if (lastPh.adcOk) {
     page += String(lastPh.millivolts, 0);
     page += F("</span> mV from ADS1115 A0");
+  } else if (settings.endpoint == ControlEndpoint::Millivolts) {
+    page += F("--.--</span> pH from ADS1115 A0");
   } else {
     page += F("--</span> mV from ADS1115 A0");
   }
@@ -1208,11 +1250,13 @@ String htmlPage() {
   page += pump.isRunning() ? F("<span class='warn'>ON</span>") : F("<span class='ok'>STOP</span>");
   page += F("</span></div></div></section>");
 
-  page += F("<section class='grid'><div class='card'><div class='k'>Target</div><div id='target' class='v'>");
-  page += String(settings.targetPh, 2);
+  page += F("<section class='grid'><div class='card'><div class='k'>Target <span id='targetunit'>");
+  page += endpointText();
+  page += F("</span></div><div id='target' class='v'>");
+  page += settings.endpoint == ControlEndpoint::Millivolts ? String(settings.targetMillivolts, 0) : String(settings.targetPh, 2);
   page += F("</div></div><div class='card'><div class='k'>mV</div><div id='mvcard' class='v'>");
   page += lastPh.adcOk ? String(lastPh.millivolts, 0) : F("--");
-  page += F("</div></div><div class='card'><div class='k'>Mode</div><div id='mode' class='v'>");
+  page += F("</div></div><div class='card'><div class='k'>Trend</div><div id='mode' class='v'>");
   page += modeLabel();
   page += F("</div></div><div class='card'><div class='k'>Used</div><div id='used' class='v ");
   page += consumedGrams >= settings.maxConsumedGrams ? F("bad'>") : F("ok'>");
@@ -1284,13 +1328,20 @@ String htmlPage() {
   page += F("<section id='tab-manual' class='panel'><div class='card full'><h2>Manual Operation</h2><form id='manualForm' action='/action' method='get' class='row'><label class='mini'>Run seconds<input name='sec' type='number' min='0.1' max='30' step='0.1' value='1.0'></label><button class='btn' name='cmd' value='manual_titrant' type='submit'>Run titrant pump</button><button class='btn' name='cmd' value='manual_sample' type='submit'>Run sample pump</button><button class='btn danger' name='cmd' value='manual_stop' type='submit'>Stop pumps</button></form><p class='tiny'>Manual pump actions are blocked while titration or calibration is active. Use seconds here for priming tubing and experiment preparation.</p></div></section>");
 
   page += F("<section id='tab-admin' class='panel'><div class='split'><div><form action='/set' method='get' class='card'><h2>Settings</h2><div class='row'>");
-  page += F("<label>Mode<select name='mode'><option value='base'");
-  if (settings.mode == TitrationMode::AddBase) page += F(" selected");
-  page += F(">Add base</option><option value='acid'");
-  if (settings.mode == TitrationMode::AddAcid) page += F(" selected");
-  page += F(">Add acid</option></select></label>");
+  page += F("<label>Signal trend<select name='trend'><option value='rise'");
+  if (settings.controlTrend == ControlTrend::Increase) page += F(" selected");
+  page += F(">Dose raises signal</option><option value='fall'");
+  if (settings.controlTrend == ControlTrend::Decrease) page += F(" selected");
+  page += F(">Dose lowers signal</option></select></label>");
+  page += F("<label>Endpoint<select name='endpoint'><option value='ph'");
+  if (settings.endpoint == ControlEndpoint::Ph) page += F(" selected");
+  page += F(">pH</option><option value='mv'");
+  if (settings.endpoint == ControlEndpoint::Millivolts) page += F(" selected");
+  page += F(">mV</option></select></label>");
   page += F("<label>Target pH<input name='target' type='number' min='0' max='14' step='0.05' value='");
   page += String(settings.targetPh, 2);
+  page += F("'></label><label>Target mV<input name='target_mv' type='number' min='-1000' max='1000' step='1' value='");
+  page += String(settings.targetMillivolts, 0);
   page += F("'></label><label>Max used g<input name='max' type='number' min='1' max='1000' step='1' value='");
   page += String(settings.maxConsumedGrams, 1);
   page += F("'></label><label>Sample g<input name='sample' type='number' min='0' max='1000' step='0.1' value='");
@@ -1300,7 +1351,9 @@ String htmlPage() {
   if (settings.titrantPreset == TitrantPreset::Naoh001) page += F(" selected");
   page += F(">0.01 mol/L NaOH</option><option value='hcl001'");
   if (settings.titrantPreset == TitrantPreset::Hcl001) page += F(" selected");
-  page += F(">0.01 mol/L HCl</option><option value='manual'");
+  page += F(">0.01 mol/L HCl</option><option value='edta001'");
+  if (settings.titrantPreset == TitrantPreset::Edta001) page += F(" selected");
+  page += F(">0.01 mol/L EDTA</option><option value='manual'");
   if (settings.titrantPreset == TitrantPreset::Manual) page += F(" selected");
   page += F(">Manual</option></select></label>");
   page += F("<label>Manual mol/L<input name='titrant_m' type='number' min='0.0001' max='10' step='0.0001' value='");
@@ -1313,7 +1366,7 @@ String htmlPage() {
   page += String(titrantPumpFlowRateGps, 3);
   page += F("</span> g/s / Sample flow <span id='samplegps'>");
   page += String(samplePumpFlowRateGps, 3);
-  page += F("</span> g/s</p><button class='primary' type='submit'>Save settings</button></form>");
+  page += F("</span> g/s</p><p class='tiny'>Use pH or mV as the endpoint, then choose whether dosing makes that signal rise or fall.</p><button class='primary' type='submit'>Save settings</button></form>");
 
   page += F("<form action='/set' method='get' class='card' style='margin-top:10px'><h2>WiFi</h2><div class='row'>");
   page += F("<label>SSID<input name='ssid' maxlength='32' value='");
@@ -1326,11 +1379,12 @@ String htmlPage() {
   page += F("function text(id,v){var e=document.getElementById(id);if(e)e.textContent=v}");
   page += F("function html(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v}");
   page += F("async function poll(){try{let r=await fetch('/json',{cache:'no-store'});let d=await r.json();");
-  page += F("text('phvalue',d.adc_ok?Number(d.ph).toFixed(2):'--.--');");
-  page += F("text('mvvalue',d.adc_ok?Number(d.mv).toFixed(0):'--');");
+  page += F("let mvMode=d.endpoint==='mV';text('primarylabel','Current '+d.endpoint);text('primaryunit',d.endpoint);");
+  page += F("text('primaryvalue',d.adc_ok?(mvMode?Number(d.mv).toFixed(0):Number(d.ph).toFixed(2)):(mvMode?'--':'--.--'));");
+  page += F("text('secondaryvalue',d.adc_ok?(mvMode?Number(d.ph).toFixed(2):Number(d.mv).toFixed(0)):(mvMode?'--.--':'--'));var se=document.getElementById('secondaryvalue');if(se&&se.parentNode)se.parentNode.lastChild.textContent=mvMode?' pH from ADS1115 A0':' mV from ADS1115 A0';");
   page += F("text('state',d.state);text('status',d.status);");
   page += F("html('pump',d.pump?'<span class=\"warn\">ON</span>':'<span class=\"ok\">STOP</span>');");
-  page += F("text('target',Number(d.target_ph).toFixed(2));text('mvcard',d.adc_ok?Number(d.mv).toFixed(0):'--');text('mode',d.mode);");
+  page += F("text('targetunit',d.endpoint);text('target',d.endpoint==='mV'?Number(d.target_mv).toFixed(0):Number(d.target_ph).toFixed(2));text('mvcard',d.adc_ok?Number(d.mv).toFixed(0):'--');text('mode',d.mode);");
   page += F("let used=Number(d.used_g),max=Number(d.max_g);text('used',used.toFixed(1)+' g');text('limit','Limit '+max.toFixed(0)+' g');");
   page += F("text('sample',Number(d.sample_delivered_g).toFixed(1)+' g');text('sampletarget','Target '+Number(d.sample_g).toFixed(1)+' g');");
   page += F("text('titrant',d.titrant);text('resultm',Number(d.result_m).toFixed(5));");
@@ -1368,11 +1422,26 @@ void handleRoot() {
 
 void handleSet() {
   bool wifiChanged = false;
+  bool endpointChanged = false;
   if (server.hasArg("mode")) {
     settings.mode = server.arg("mode") == "acid" ? TitrationMode::AddAcid : TitrationMode::AddBase;
+    settings.controlTrend = settings.mode == TitrationMode::AddAcid ? ControlTrend::Decrease : ControlTrend::Increase;
+  }
+  if (server.hasArg("trend")) {
+    settings.controlTrend = server.arg("trend") == "fall" ? ControlTrend::Decrease : ControlTrend::Increase;
+    settings.mode = settings.controlTrend == ControlTrend::Decrease ? TitrationMode::AddAcid : TitrationMode::AddBase;
+  }
+  if (server.hasArg("endpoint")) {
+    ControlEndpoint nextEndpoint =
+        server.arg("endpoint") == "mv" ? ControlEndpoint::Millivolts : ControlEndpoint::Ph;
+    endpointChanged = nextEndpoint != settings.endpoint;
+    settings.endpoint = nextEndpoint;
   }
   if (server.hasArg("target")) {
     settings.targetPh = constrain(server.arg("target").toFloat(), 0.0f, 14.0f);
+  }
+  if (server.hasArg("target_mv")) {
+    settings.targetMillivolts = constrain(server.arg("target_mv").toFloat(), -1000.0f, 1000.0f);
   }
   if (server.hasArg("max")) {
     settings.maxConsumedGrams = constrain(server.arg("max").toFloat(), 1.0f, 1000.0f);
@@ -1384,6 +1453,8 @@ void handleSet() {
     String titrant = server.arg("titrant");
     if (titrant == "hcl001") {
       settings.titrantPreset = TitrantPreset::Hcl001;
+    } else if (titrant == "edta001") {
+      settings.titrantPreset = TitrantPreset::Edta001;
     } else if (titrant == "manual") {
       settings.titrantPreset = TitrantPreset::Manual;
     } else {
@@ -1461,6 +1532,9 @@ void handleSet() {
     }
   }
 
+  if (endpointChanged) {
+    phDynamics.reset();
+  }
   statusLine = wifiChanged ? "WiFi saved" : (calibrationChanged ? "Calibration saved" : "Settings saved");
   displayDirty = true;
   redirectHomeTab(calibrationChanged ? "cal" : "admin");
@@ -1577,6 +1651,8 @@ void handleJson() {
   json += ",\"titrant\":\"" + jsonEscape(titrantLabel()) + "\"";
   json += ",\"titrant_m\":" + String(activeTitrantMolarity(), 5);
   json += ",\"result_m\":" + String(resultConcentrationM, 5);
+  json += ",\"endpoint\":\"" + String(endpointText()) + "\"";
+  json += ",\"target_mv\":" + String(settings.targetMillivolts, 0);
   json += ",\"target_ph\":" + String(settings.targetPh, 2);
   json += ",\"max_g\":" + String(settings.maxConsumedGrams, 1);
   json += ",\"mode\":\"" + modeLabel() + "\"";
@@ -1826,23 +1902,27 @@ void drawDisplay() {
 
   char line[48];
 
-  k10.canvas->canvasText("K10 PH TITRATOR", 1, COLOR_WARN);
+  k10.canvas->canvasText("K10 POT TITRATOR", 1, COLOR_WARN);
 
   if (lastPh.adcOk) {
-    snprintf(line, sizeof(line), "PH %.2f  MV %.0f", lastPh.ph, lastPh.millivolts);
+    snprintf(line, sizeof(line), "pH %.2f  mV %.0f", lastPh.ph, lastPh.millivolts);
   } else {
-    snprintf(line, sizeof(line), "PH --    MV --");
+    snprintf(line, sizeof(line), "pH --    mV --");
   }
   k10.canvas->canvasText(line, 3, lastPh.adcOk ? COLOR_OK : COLOR_WARN);
 
-  snprintf(line, sizeof(line), "TARGET %.2f %s", settings.targetPh, modeText());
+  if (settings.endpoint == ControlEndpoint::Millivolts) {
+    snprintf(line, sizeof(line), "TARGET %.0fmV %s", settings.targetMillivolts, trendText());
+  } else {
+    snprintf(line, sizeof(line), "TARGET %.2fpH %s", settings.targetPh, trendText());
+  }
   k10.canvas->canvasText(line, 4, COLOR_TEXT);
 
-  snprintf(line, sizeof(line), "USED %.1f/%.0fG", consumedGrams, settings.maxConsumedGrams);
+  snprintf(line, sizeof(line), "USED %.1f/%.0fg", consumedGrams, settings.maxConsumedGrams);
   k10.canvas->canvasText(line, 5, consumedGrams >= settings.maxConsumedGrams ? COLOR_ERROR : COLOR_OK);
 
   if (scaleReady) {
-    snprintf(line, sizeof(line), "REACTOR %.1fG", lastScale.grams);
+    snprintf(line, sizeof(line), "REACTOR %.1fg", lastScale.grams);
   } else {
     snprintf(line, sizeof(line), "REACTOR --");
   }

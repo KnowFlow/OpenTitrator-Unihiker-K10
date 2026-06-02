@@ -8,9 +8,20 @@ enum class TitrationMode : uint8_t {
   AddAcid
 };
 
+enum class ControlEndpoint : uint8_t {
+  Ph,
+  Millivolts
+};
+
+enum class ControlTrend : uint8_t {
+  Increase,
+  Decrease
+};
+
 enum class TitrantPreset : uint8_t {
   Naoh001,
   Hcl001,
+  Edta001,
   Manual
 };
 
@@ -30,9 +41,13 @@ enum class TitrationStopReason : uint8_t {
 
 struct TitrationSettings {
   TitrationMode mode = TitrationMode::AddBase;
+  ControlEndpoint endpoint = ControlEndpoint::Ph;
+  ControlTrend controlTrend = ControlTrend::Increase;
   TitrantPreset titrantPreset = TitrantPreset::Naoh001;
   float targetPh = 7.00f;
   float tolerancePh = 0.05f;
+  float targetMillivolts = 0.0f;
+  float toleranceMillivolts = 5.0f;
   float maxConsumedGrams = 20.0f;
   float sampleGrams = 20.0f;
   float titrantMolarity = 0.01f;
@@ -131,20 +146,37 @@ struct TitrationDynamics {
     return absoluteFloat(dpH_dt()) > 0.08f;
   }
 
+  bool isSteep(ControlEndpoint endpoint) const {
+    float limit = endpoint == ControlEndpoint::Millivolts ? 8.0f : 0.08f;
+    return absoluteFloat(dpH_dt()) > limit;
+  }
+
   bool isSettled(float maxAbsDpHPerSecond = 0.005f) const {
     return count >= 3 && absoluteFloat(dpH_dt()) <= maxAbsDpHPerSecond;
   }
 
+  bool isSettled(ControlEndpoint endpoint) const {
+    float limit = endpoint == ControlEndpoint::Millivolts ? 0.5f : 0.005f;
+    return count >= 3 && absoluteFloat(dpH_dt()) <= limit;
+  }
+
   bool isOvershooting(TitrationMode mode, float target) const {
+    ControlTrend trend = mode == TitrationMode::AddBase ? ControlTrend::Increase : ControlTrend::Decrease;
+    return isOvershooting(trend, ControlEndpoint::Ph, target);
+  }
+
+  bool isOvershooting(ControlTrend trend, ControlEndpoint endpoint, float target) const {
     if (count < 2) {
       return false;
     }
     float d = dpH_dt();
     uint8_t i = (idx + N - 1) % N;
-    if (mode == TitrationMode::AddBase) {
-      return ph[i] > target + 0.02f && d > 0.0f;
+    float margin = endpoint == ControlEndpoint::Millivolts ? 2.0f : 0.02f;
+    bool doseRaisesValue = trend == ControlTrend::Increase;
+    if (doseRaisesValue) {
+      return ph[i] > target + margin && d > 0.0f;
     } else {
-      return ph[i] < target - 0.02f && d < 0.0f;
+      return ph[i] < target - margin && d < 0.0f;
     }
   }
 };
@@ -155,6 +187,26 @@ inline float absoluteFloat(float value) {
 
 inline bool isValidPh(float ph) {
   return ph >= 0.0f && ph <= 14.0f;
+}
+
+inline bool isValidMillivolts(float millivolts) {
+  return millivolts >= -1000.0f && millivolts <= 1000.0f;
+}
+
+inline float controlTarget(const TitrationSettings &settings) {
+  return settings.endpoint == ControlEndpoint::Millivolts ? settings.targetMillivolts : settings.targetPh;
+}
+
+inline float controlTolerance(const TitrationSettings &settings) {
+  return settings.endpoint == ControlEndpoint::Millivolts ? settings.toleranceMillivolts : settings.tolerancePh;
+}
+
+inline bool isValidControlValue(const TitrationSettings &settings, float value) {
+  return settings.endpoint == ControlEndpoint::Millivolts ? isValidMillivolts(value) : isValidPh(value);
+}
+
+inline bool doseIncreasesControlValue(const TitrationSettings &settings) {
+  return settings.controlTrend == ControlTrend::Increase;
 }
 
 inline float computeConsumedGrams(float initialWeightGrams, float currentWeightGrams) {
@@ -171,6 +223,7 @@ inline float titrantMolarityForPreset(TitrantPreset preset, float manualMolarity
   switch (preset) {
     case TitrantPreset::Naoh001:
     case TitrantPreset::Hcl001:
+    case TitrantPreset::Edta001:
       return 0.01f;
     case TitrantPreset::Manual:
       return manualMolarity > 0.0f ? manualMolarity : 0.0f;
@@ -287,12 +340,12 @@ inline int adsRawToAnalog10Bit(int16_t adsRaw) {
 
 inline TitrationDecision decideAdaptiveDose(
     const TitrationSettings &settings,
-    float currentPh,
+    float currentValue,
     float consumedGrams,
     const TitrationDynamics &dyn) {
   TitrationDecision d;
 
-  if (!isValidPh(currentPh)) {
+  if (!isValidControlValue(settings, currentValue)) {
     d.action = TitrationAction::Error;
     d.reason = TitrationStopReason::InvalidReading;
     return d;
@@ -304,53 +357,58 @@ inline TitrationDecision decideAdaptiveDose(
     return d;
   }
 
-  const bool shouldAddBase = settings.mode == TitrationMode::AddBase && currentPh < settings.targetPh;
-  const bool shouldAddAcid = settings.mode == TitrationMode::AddAcid && currentPh > settings.targetPh;
-  if (!shouldAddBase && !shouldAddAcid) {
+  const float target = controlTarget(settings);
+  const bool doseRaisesValue = doseIncreasesControlValue(settings);
+  const bool shouldDose = doseRaisesValue ? currentValue < target : currentValue > target;
+  if (!shouldDose) {
     d.action = TitrationAction::Done;
     d.reason = TitrationStopReason::TargetReached;
     return d;
   }
 
-  if (dyn.isOvershooting(settings.mode, settings.targetPh)) {
+  if (dyn.isOvershooting(settings.controlTrend, settings.endpoint, target)) {
     d.action = TitrationAction::Done;
     d.reason = TitrationStopReason::TargetReached;
     return d;
   }
 
-  const float error = absoluteFloat(currentPh - settings.targetPh);
-  if (error <= 0.05f) {
+  const float error = absoluteFloat(currentValue - target);
+  if (error <= controlTolerance(settings)) {
     d.action = TitrationAction::Done;
     d.reason = TitrationStopReason::TargetReached;
     return d;
   }
 
   const float slope = dyn.dpH_dt();
-  const bool driftingTowardTarget =
-      (settings.mode == TitrationMode::AddBase && slope > 0.001f) ||
-      (settings.mode == TitrationMode::AddAcid && slope < -0.001f);
+  const float driftThreshold = settings.endpoint == ControlEndpoint::Millivolts ? 0.1f : 0.001f;
+  const bool driftingTowardTarget = doseRaisesValue ? slope > driftThreshold : slope < -driftThreshold;
   const float predictiveStopMargin =
-      settings.mode == TitrationMode::AddAcid ? 0.15f : 0.10f;
+      settings.endpoint == ControlEndpoint::Millivolts
+          ? (settings.controlTrend == ControlTrend::Decrease ? 15.0f : 10.0f)
+          : (settings.controlTrend == ControlTrend::Decrease ? 0.15f : 0.10f);
   if (error <= predictiveStopMargin && driftingTowardTarget) {
     d.action = TitrationAction::Done;
     d.reason = TitrationStopReason::TargetReached;
     return d;
   }
 
-  const bool steep = dyn.isSteep();
+  const bool steep = dyn.isSteep(settings.endpoint);
+  const float farError = settings.endpoint == ControlEndpoint::Millivolts ? 100.0f : 1.0f;
+  const float mediumError = settings.endpoint == ControlEndpoint::Millivolts ? 30.0f : 0.3f;
+  const float nearError = settings.endpoint == ControlEndpoint::Millivolts ? 10.0f : 0.1f;
   if (steep) {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 25;
     d.settleMs = 15000;
-  } else if (error > 1.0f) {
+  } else if (error > farError) {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 450;
     d.settleMs = 5000;
-  } else if (error > 0.3f) {
+  } else if (error > mediumError) {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 150;
     d.settleMs = 8000;
-  } else if (error > 0.1f) {
+  } else if (error > nearError) {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 60;
     d.settleMs = 12000;

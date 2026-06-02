@@ -143,6 +143,7 @@ void setup() {
   // Acid mode: far above target -> large dose
   {
     settings.mode = TitrationMode::AddAcid;
+    settings.controlTrend = ControlTrend::Decrease;
     TitrationDecision d = decideAdaptiveDose(settings, 8.40f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "acid mode doses above target");
     expectEqual(d.pumpPulseMs, 450, "acid far error uses 450ms pulse");
@@ -181,6 +182,30 @@ void setup() {
   }
 
   settings.mode = TitrationMode::AddBase;
+  settings.controlTrend = ControlTrend::Increase;
+
+  // mV endpoint can be controlled without assuming an acid/base titrant.
+  {
+    settings.endpoint = ControlEndpoint::Millivolts;
+    settings.targetMillivolts = 100.0f;
+    settings.controlTrend = ControlTrend::Increase;
+    dyn.reset();
+    TitrationDecision d = decideAdaptiveDose(settings, 40.0f, 12.0f, dyn);
+    expectTrue(d.action == TitrationAction::Dose, "mV rising endpoint doses below target");
+    d = decideAdaptiveDose(settings, 104.0f, 12.0f, dyn);
+    expectTrue(d.action == TitrationAction::Done, "mV rising endpoint stops inside tolerance");
+
+    settings.controlTrend = ControlTrend::Decrease;
+    settings.targetMillivolts = -50.0f;
+    d = decideAdaptiveDose(settings, 0.0f, 12.0f, dyn);
+    expectTrue(d.action == TitrationAction::Dose, "mV falling endpoint doses above target");
+    d = decideAdaptiveDose(settings, -54.0f, 12.0f, dyn);
+    expectTrue(d.action == TitrationAction::Done, "mV falling endpoint stops inside tolerance");
+
+    settings.endpoint = ControlEndpoint::Ph;
+    settings.controlTrend = ControlTrend::Increase;
+    settings.targetPh = 7.00f;
+  }
 
   // ---- Helper functions ----
 
@@ -189,6 +214,7 @@ void setup() {
   expectNear(computeSampleGainGrams(100.0f, 120.0f), 20.0f, 0.001f, "sample delivery uses reactor weight gain");
   expectNear(computeSampleGainGrams(120.0f, 100.0f), 0.0f, 0.001f, "sample delivery ignores weight loss");
   expectNear(titrantMolarityForPreset(TitrantPreset::Naoh001, 0.2f), 0.01f, 0.001f, "NaOH preset uses 0.01 mol/L");
+  expectNear(titrantMolarityForPreset(TitrantPreset::Edta001, 0.2f), 0.01f, 0.001f, "EDTA preset uses 0.01 mol/L");
   expectNear(titrantMolarityForPreset(TitrantPreset::Manual, 0.05f), 0.05f, 0.001f, "manual titrant molarity is used");
   expectNear(computeSampleConcentrationMolar(0.01f, 4.0f, 40.0f), 0.001f, 0.000001f, "sample concentration uses titrant molarity and mass ratio");
   expectNear(computeProbeMillivoltsFromAdsInput(1329.3334f), -59.0f, 0.1f, "alkaline calibration maps ADS input to probe millivolts");
