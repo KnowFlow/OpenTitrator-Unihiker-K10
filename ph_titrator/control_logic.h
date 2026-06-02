@@ -42,6 +42,7 @@ enum class TitrationStopReason : uint8_t {
   None,
   TargetReached,
   MassLimit,
+  TimeLimit,
   InvalidReading,
   SensorFault
 };
@@ -58,6 +59,12 @@ struct TitrationSettings {
   float maxConsumedGrams = 20.0f;
   float sampleGrams = 20.0f;
   float titrantMolarity = 0.01f;
+  float controlBand = 0.30f;
+  float stableDelta = 0.005f;
+  uint16_t holdSeconds = 5;
+  uint16_t minSettleSeconds = 5;
+  uint16_t maxSettleSeconds = 30;
+  uint16_t maxTimeSeconds = 1800;
 };
 
 struct TitrationDecision {
@@ -167,6 +174,10 @@ struct TitrationDynamics {
     return count >= 3 && absoluteFloat(dpH_dt()) <= limit;
   }
 
+  bool isSettledWithin(float maxAbsDeltaPerSecond) const {
+    return count >= 3 && absoluteFloat(dpH_dt()) <= maxAbsDeltaPerSecond;
+  }
+
   bool isOvershooting(TitrationMode mode, float target) const {
     ControlTrend trend = mode == TitrationMode::AddBase ? ControlTrend::Increase : ControlTrend::Decrease;
     return isOvershooting(trend, ControlEndpoint::Ph, target);
@@ -216,6 +227,30 @@ inline bool doseIncreasesControlValue(const TitrationSettings &settings) {
   return settings.controlTrend == ControlTrend::Increase;
 }
 
+inline bool isEndpointReached(const TitrationSettings &settings, float currentValue) {
+  const float target = controlTarget(settings);
+  const bool doseRaisesValue = doseIncreasesControlValue(settings);
+  if (absoluteFloat(currentValue - target) <= controlTolerance(settings)) {
+    return true;
+  }
+  return doseRaisesValue ? currentValue >= target : currentValue <= target;
+}
+
+inline uint16_t clampSettleMs(const TitrationSettings &settings, uint16_t requestedMs) {
+  uint32_t minMs = (uint32_t)settings.minSettleSeconds * 1000UL;
+  uint32_t maxMs = (uint32_t)settings.maxSettleSeconds * 1000UL;
+  if (maxMs < minMs) {
+    maxMs = minMs;
+  }
+  if (requestedMs < minMs) {
+    return (uint16_t)(minMs > 65535UL ? 65535UL : minMs);
+  }
+  if (requestedMs > maxMs) {
+    return (uint16_t)(maxMs > 65535UL ? 65535UL : maxMs);
+  }
+  return requestedMs;
+}
+
 inline float computeConsumedGrams(float initialWeightGrams, float currentWeightGrams) {
   float consumed = initialWeightGrams - currentWeightGrams;
   return consumed > 0.0f ? consumed : 0.0f;
@@ -250,6 +285,12 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       settings.titrantMolarity = 0.01f;
       settings.maxConsumedGrams = 20.0f;
       settings.sampleGrams = 20.0f;
+      settings.controlBand = 0.30f;
+      settings.stableDelta = 0.005f;
+      settings.holdSeconds = 5;
+      settings.minSettleSeconds = 5;
+      settings.maxSettleSeconds = 30;
+      settings.maxTimeSeconds = 1800;
       break;
     case TitrationMethod::MvEndpoint:
       settings.endpoint = ControlEndpoint::Millivolts;
@@ -260,6 +301,12 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       settings.titrantMolarity = 0.01f;
       settings.maxConsumedGrams = 20.0f;
       settings.sampleGrams = 20.0f;
+      settings.controlBand = 30.0f;
+      settings.stableDelta = 0.5f;
+      settings.holdSeconds = 5;
+      settings.minSettleSeconds = 5;
+      settings.maxSettleSeconds = 30;
+      settings.maxTimeSeconds = 1800;
       break;
     case TitrationMethod::EdtaHardness:
       settings.endpoint = ControlEndpoint::Millivolts;
@@ -270,6 +317,12 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       settings.titrantMolarity = 0.01f;
       settings.maxConsumedGrams = 20.0f;
       settings.sampleGrams = 20.0f;
+      settings.controlBand = 30.0f;
+      settings.stableDelta = 0.5f;
+      settings.holdSeconds = 5;
+      settings.minSettleSeconds = 5;
+      settings.maxSettleSeconds = 30;
+      settings.maxTimeSeconds = 1800;
       break;
     case TitrationMethod::Manual:
       settings.titrantPreset = TitrantPreset::Manual;
@@ -419,7 +472,7 @@ inline TitrationDecision decideAdaptiveDose(
   }
 
   const float error = absoluteFloat(currentValue - target);
-  if (error <= controlTolerance(settings)) {
+  if (isEndpointReached(settings, currentValue)) {
     d.action = TitrationAction::Done;
     d.reason = TitrationStopReason::TargetReached;
     return d;
@@ -439,29 +492,29 @@ inline TitrationDecision decideAdaptiveDose(
   }
 
   const bool steep = dyn.isSteep(settings.endpoint);
-  const float farError = settings.endpoint == ControlEndpoint::Millivolts ? 100.0f : 1.0f;
-  const float mediumError = settings.endpoint == ControlEndpoint::Millivolts ? 30.0f : 0.3f;
-  const float nearError = settings.endpoint == ControlEndpoint::Millivolts ? 10.0f : 0.1f;
+  const float farError = settings.controlBand * 3.0f;
+  const float mediumError = settings.controlBand;
+  const float nearError = settings.controlBand * 0.33f;
   if (steep) {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 25;
-    d.settleMs = 15000;
+    d.settleMs = clampSettleMs(settings, 15000);
   } else if (error > farError) {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 450;
-    d.settleMs = 5000;
+    d.settleMs = clampSettleMs(settings, 5000);
   } else if (error > mediumError) {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 150;
-    d.settleMs = 8000;
+    d.settleMs = clampSettleMs(settings, 8000);
   } else if (error > nearError) {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 60;
-    d.settleMs = 12000;
+    d.settleMs = clampSettleMs(settings, 12000);
   } else {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 25;
-    d.settleMs = 15000;
+    d.settleMs = clampSettleMs(settings, 15000);
   }
   return d;
 }

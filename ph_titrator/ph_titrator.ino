@@ -549,6 +549,8 @@ float sampleDeliveredGrams = 0.0f;
 float consumedGrams = 0.0f;
 float resultConcentrationM = 0.0f;
 uint32_t stateStartedMs = 0;
+uint32_t runStartedMs = 0;
+uint32_t endpointHoldStartedMs = 0;
 uint16_t activePulseMs = 0;
 uint16_t activeSettleMs = 0;
 uint8_t sensorFaultCount = 0;
@@ -705,7 +707,13 @@ bool methodMatchesPreset(TitrationMethod method) {
          absoluteFloat(preset.targetMillivolts - settings.targetMillivolts) <= 0.001f &&
          absoluteFloat(preset.maxConsumedGrams - settings.maxConsumedGrams) <= 0.001f &&
          absoluteFloat(preset.sampleGrams - settings.sampleGrams) <= 0.001f &&
-         absoluteFloat(preset.titrantMolarity - settings.titrantMolarity) <= 0.00001f;
+         absoluteFloat(preset.titrantMolarity - settings.titrantMolarity) <= 0.00001f &&
+         absoluteFloat(preset.controlBand - settings.controlBand) <= 0.001f &&
+         absoluteFloat(preset.stableDelta - settings.stableDelta) <= 0.001f &&
+         preset.holdSeconds == settings.holdSeconds &&
+         preset.minSettleSeconds == settings.minSettleSeconds &&
+         preset.maxSettleSeconds == settings.maxSettleSeconds &&
+         preset.maxTimeSeconds == settings.maxTimeSeconds;
 }
 
 String stateLabel() {
@@ -731,6 +739,7 @@ String reasonLabel(TitrationStopReason reason) {
     case TitrationStopReason::None: return "";
     case TitrationStopReason::TargetReached: return "Target reached";
     case TitrationStopReason::MassLimit: return "Mass limit";
+    case TitrationStopReason::TimeLimit: return "Time limit";
     case TitrationStopReason::InvalidReading: return "Bad pH";
     case TitrationStopReason::SensorFault: return "SENSOR_FAULT";
   }
@@ -795,8 +804,12 @@ bool startTitration() {
   initialBottleWeight = lastScale.grams;
   consumedGrams = 0.0f;
   resultConcentrationM = 0.0f;
+  runStartedMs = 0;
+  endpointHoldStartedMs = 0;
   phReady = false;
   stopReason = TitrationStopReason::None;
+  runStartedMs = millis();
+  endpointHoldStartedMs = 0;
   if (settings.sampleGrams <= 0.01f) {
     setState(RunState::FilterWarmup, "Stabilizing pH");
   } else {
@@ -1173,7 +1186,11 @@ void runController() {
     if (elapsed < settleMs) {
       return;
     }
-    if (elapsed < MAX_SETTLING_TIME_MS && (!phSampleFresh || !phDynamics.isSettled(settings.endpoint))) {
+    uint32_t maxSettleMs = (uint32_t)settings.maxSettleSeconds * 1000UL;
+    if (maxSettleMs < settleMs) {
+      maxSettleMs = settleMs;
+    }
+    if (elapsed < maxSettleMs && (!phSampleFresh || !phDynamics.isSettledWithin(settings.stableDelta))) {
       statusLine = String("Settling ") + endpointText();
       displayDirty = true;
       return;
@@ -1200,6 +1217,34 @@ void runController() {
     setState(RunState::Error, reasonLabel(stopReason));
     return;
   }
+
+  if (runStartedMs > 0 && settings.maxTimeSeconds > 0 &&
+      millis() - runStartedMs >= (uint32_t)settings.maxTimeSeconds * 1000UL) {
+    pump.stop();
+    samplePump.stop();
+    stopReason = TitrationStopReason::TimeLimit;
+    setState(RunState::Error, "Time limit");
+    return;
+  }
+
+  if (isEndpointReached(settings, activeControlValue())) {
+    if (endpointHoldStartedMs == 0) {
+      endpointHoldStartedMs = millis();
+    }
+    uint32_t holdMs = (uint32_t)settings.holdSeconds * 1000UL;
+    if (holdMs == 0 || millis() - endpointHoldStartedMs >= holdMs) {
+      pump.stop();
+      stopReason = TitrationStopReason::TargetReached;
+      resultConcentrationM = computeSampleConcentrationMolar(activeTitrantMolarity(), consumedGrams, settings.sampleGrams);
+      setState(RunState::Done, reasonLabel(stopReason));
+    } else {
+      pump.stop();
+      statusLine = String("Holding ") + endpointText();
+      displayDirty = true;
+    }
+    return;
+  }
+  endpointHoldStartedMs = 0;
 
   TitrationDecision decision = decideAdaptiveDose(
       settings, activeControlValue(), consumedGrams, phDynamics);
@@ -1451,6 +1496,19 @@ String htmlPage() {
   page += F(">Manual</option></select></label>");
   page += F("<label>Manual mol/L<input id='titrantMInput' name='titrant_m' type='number' min='0.0001' max='10' step='0.0001' value='");
   page += String(settings.titrantMolarity, 4);
+  page += F("'></label><label>Control band<input id='controlBandInput' name='control_band' type='number' min='0.001' max='1000' step='0.001' value='");
+  page += String(settings.controlBand, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
+  page += F("'></label><label>Stable delta/s<input id='stableDeltaInput' name='stable_delta' type='number' min='0.001' max='1000' step='0.001' value='");
+  page += String(settings.stableDelta, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
+  page += F("'></label></div><div class='row' style='margin-top:10px'>");
+  page += F("<label>Hold s<input id='holdInput' name='hold_s' type='number' min='0' max='120' step='1' value='");
+  page += String(settings.holdSeconds);
+  page += F("'></label><label>Min settle s<input id='minSettleInput' name='min_settle_s' type='number' min='1' max='120' step='1' value='");
+  page += String(settings.minSettleSeconds);
+  page += F("'></label><label>Max settle s<input id='maxSettleInput' name='max_settle_s' type='number' min='1' max='180' step='1' value='");
+  page += String(settings.maxSettleSeconds);
+  page += F("'></label><label>Max time s<input id='maxTimeInput' name='max_time_s' type='number' min='10' max='7200' step='10' value='");
+  page += String(settings.maxTimeSeconds);
   page += F("'></label></div><p class='tiny'>Active titrant: <span id='titrant'>");
   page += htmlEscape(titrantLabel());
   page += F("</span> / result <span id='resultm'>");
@@ -1489,8 +1547,8 @@ String htmlPage() {
   page += F("}catch(e){}}setInterval(poll,2000);");
   page += F("function activateTab(name){var p=document.getElementById('tab-'+name);if(!p)return;document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.tab===name)});document.querySelectorAll('.panel').forEach(function(x){x.classList.remove('active')});p.classList.add('active')}");
   page += F("document.querySelectorAll('.tab').forEach(function(b){b.onclick=function(){activateTab(b.dataset.tab);location.hash=b.dataset.tab}});var initial=(location.hash||'#run').slice(1);activateTab(initial);");
-  page += F("var presets={ph_ep:{endpoint:'ph',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'naoh001',titrant_m:'0.0100'},mv_ep:{endpoint:'mv',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'manual',titrant_m:'0.0100'},edta_hardness:{endpoint:'mv',trend:'fall',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'edta001',titrant_m:'0.0100'}};");
-  page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m)});");
+  page += F("var presets={ph_ep:{endpoint:'ph',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'naoh001',titrant_m:'0.0100',control_band:'0.300',stable_delta:'0.005',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},mv_ep:{endpoint:'mv',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'manual',titrant_m:'0.0100',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},edta_hardness:{endpoint:'mv',trend:'fall',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'edta001',titrant_m:'0.0100',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'}};");
+  page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m);setv('controlBandInput',p.control_band);setv('stableDeltaInput',p.stable_delta);setv('holdInput',p.hold_s);setv('minSettleInput',p.min_settle_s);setv('maxSettleInput',p.max_settle_s);setv('maxTimeInput',p.max_time_s)});");
   page += F("var mf=document.getElementById('manualForm');if(mf)mf.addEventListener('submit',async function(e){e.preventDefault();var fd=new FormData(mf);var cmd=e.submitter&&e.submitter.name?e.submitter.value:fd.get('cmd');fd.set('cmd',cmd);fd.set('ajax','1');try{await fetch('/action?'+new URLSearchParams(fd).toString(),{cache:'no-store'});poll()}catch(err){}});");
   page += F("</script></main></body></html>");
   return page;
@@ -1584,6 +1642,39 @@ void handleSet() {
     float nextMolarity = constrain(server.arg("titrant_m").toFloat(), 0.0001f, 10.0f);
     methodFieldChanged = methodFieldChanged || absoluteFloat(nextMolarity - settings.titrantMolarity) > 0.00001f;
     settings.titrantMolarity = nextMolarity;
+  }
+  if (server.hasArg("control_band")) {
+    float nextBand = constrain(server.arg("control_band").toFloat(), 0.001f, 1000.0f);
+    methodFieldChanged = methodFieldChanged || absoluteFloat(nextBand - settings.controlBand) > 0.001f;
+    settings.controlBand = nextBand;
+  }
+  if (server.hasArg("stable_delta")) {
+    float nextStableDelta = constrain(server.arg("stable_delta").toFloat(), 0.001f, 1000.0f);
+    methodFieldChanged = methodFieldChanged || absoluteFloat(nextStableDelta - settings.stableDelta) > 0.001f;
+    settings.stableDelta = nextStableDelta;
+  }
+  if (server.hasArg("hold_s")) {
+    uint16_t nextHold = (uint16_t)constrain(server.arg("hold_s").toInt(), 0, 120);
+    methodFieldChanged = methodFieldChanged || nextHold != settings.holdSeconds;
+    settings.holdSeconds = nextHold;
+  }
+  if (server.hasArg("min_settle_s")) {
+    uint16_t nextMinSettle = (uint16_t)constrain(server.arg("min_settle_s").toInt(), 1, 120);
+    methodFieldChanged = methodFieldChanged || nextMinSettle != settings.minSettleSeconds;
+    settings.minSettleSeconds = nextMinSettle;
+  }
+  if (server.hasArg("max_settle_s")) {
+    uint16_t nextMaxSettle = (uint16_t)constrain(server.arg("max_settle_s").toInt(), 1, 180);
+    methodFieldChanged = methodFieldChanged || nextMaxSettle != settings.maxSettleSeconds;
+    settings.maxSettleSeconds = nextMaxSettle;
+  }
+  if (server.hasArg("max_time_s")) {
+    uint16_t nextMaxTime = (uint16_t)constrain(server.arg("max_time_s").toInt(), 10, 7200);
+    methodFieldChanged = methodFieldChanged || nextMaxTime != settings.maxTimeSeconds;
+    settings.maxTimeSeconds = nextMaxTime;
+  }
+  if (settings.maxSettleSeconds < settings.minSettleSeconds) {
+    settings.maxSettleSeconds = settings.minSettleSeconds;
   }
 
   bool calibrationChanged = false;
@@ -1793,6 +1884,12 @@ void handleJson() {
   json += ",\"target_mv\":" + String(settings.targetMillivolts, 0);
   json += ",\"target_ph\":" + String(settings.targetPh, 2);
   json += ",\"max_g\":" + String(settings.maxConsumedGrams, 1);
+  json += ",\"control_band\":" + String(settings.controlBand, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
+  json += ",\"stable_delta\":" + String(settings.stableDelta, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
+  json += ",\"hold_s\":" + String(settings.holdSeconds);
+  json += ",\"min_settle_s\":" + String(settings.minSettleSeconds);
+  json += ",\"max_settle_s\":" + String(settings.maxSettleSeconds);
+  json += ",\"max_time_s\":" + String(settings.maxTimeSeconds);
   json += ",\"mode\":\"" + modeLabel() + "\"";
   json += ",\"state\":\"" + stateLabel() + "\"";
   json += ",\"status\":\"" + jsonEscape(statusLine) + "\"";

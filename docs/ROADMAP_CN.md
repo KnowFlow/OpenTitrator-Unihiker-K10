@@ -40,21 +40,21 @@
 
 目标：把现在固定写死的加液节奏改成可配置的 EP 终点控制。
 
-- [ ] 增加 `controlBand`：进入控制区后减速。
-- [ ] 增加 `holdSeconds`：达到终点后保持一段时间再确认完成。
-- [ ] 增加 `minSettleSec` / `maxSettleSec`。
-- [ ] 增加 `stableDelta`：稳定判定阈值。
-- [ ] 增加 `maxTimeSec`：最长滴定时间保护。
-- [ ] 按 endpoint 使用不同默认值：
+- [x] 增加 `controlBand`：进入控制区后减速。
+- [x] 增加 `holdSeconds`：达到终点后保持一段时间再确认完成。
+- [x] 增加 `minSettleSec` / `maxSettleSec`。
+- [x] 增加 `stableDelta`：稳定判定阈值。
+- [x] 增加 `maxTimeSec`：最长滴定时间保护。
+- [x] 按 endpoint 使用不同默认值：
   - pH: stableDelta 默认可从 `0.005-0.02 pH/s` 起步
   - mV: stableDelta 默认可从 `0.5-2 mV/s` 起步
-- [ ] 网页 Admin 或 Method 设置中显示这些参数。
+- [x] 网页 Admin 或 Method 设置中显示这些参数。
 
 验收：
 
-- [ ] 远离终点时加液更快，进入控制区后减速。
-- [ ] 达到终点后不立刻结束，而是经过 hold 确认。
-- [ ] 若 hold 期间信号退回终点外，继续补加并重新计时。
+- [x] 远离终点时加液更快，进入控制区后减速。
+- [x] 达到终点后不立刻结束，而是经过 hold 确认。
+- [x] 若 hold 期间信号退回终点外，继续补加并重新计时。
 
 ## M3 网页曲线和电脑端数据保存
 

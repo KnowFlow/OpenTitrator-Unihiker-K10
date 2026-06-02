@@ -99,6 +99,25 @@ void setup() {
     expectEqual(d.settleMs, 8000, "medium error uses 8s settle");
   }
 
+  // Wider control band slows the same error earlier.
+  {
+    settings.controlBand = 0.50f;
+    TitrationDecision d = decideAdaptiveDose(settings, 6.55f, 12.0f, dyn);
+    expectTrue(d.action == TitrationAction::Dose, "wide control band doses");
+    expectEqual(d.pumpPulseMs, 60, "wide control band slows medium error");
+    settings.controlBand = 0.30f;
+  }
+
+  // Settle limits clamp dose decisions.
+  {
+    settings.minSettleSeconds = 10;
+    settings.maxSettleSeconds = 11;
+    TitrationDecision d = decideAdaptiveDose(settings, 5.80f, 12.0f, dyn);
+    expectEqual(d.settleMs, 10000, "min settle clamps far dose settle");
+    settings.minSettleSeconds = 5;
+    settings.maxSettleSeconds = 30;
+  }
+
   // Near error -> small pulse
   {
     TitrationDecision d = decideAdaptiveDose(settings, 6.82f, 12.0f, dyn);
@@ -208,6 +227,16 @@ void setup() {
   }
 
   // ---- Helper functions ----
+
+  expectTrue(isEndpointReached(settings, 7.00f), "endpoint reached inside pH tolerance");
+  expectTrue(!isEndpointReached(settings, 6.80f), "endpoint not reached before pH target");
+  settings.endpoint = ControlEndpoint::Millivolts;
+  settings.controlTrend = ControlTrend::Decrease;
+  settings.targetMillivolts = -50.0f;
+  expectTrue(isEndpointReached(settings, -51.0f), "falling mV endpoint reached past target");
+  settings.endpoint = ControlEndpoint::Ph;
+  settings.controlTrend = ControlTrend::Increase;
+  settings.targetPh = 7.00f;
 
   expectNear(computeConsumedGrams(312.5f, 300.0f), 12.5f, 0.001f, "consumed grams from bottle weight loss");
   expectNear(computeConsumedGrams(312.5f, 313.2f), 0.0f, 0.001f, "negative consumption is clamped");
