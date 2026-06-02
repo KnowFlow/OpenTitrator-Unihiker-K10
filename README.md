@@ -1,6 +1,6 @@
 # Unihiker K10 pH Titrator
 
-[中文](README_CN.md) · [User Manual](docs/MANUAL.md) · [使用说明书](docs/MANUAL_CN.md)
+[中文](README_CN.md) · [User Manual](docs/MANUAL.md) · [使用说明书](docs/MANUAL_CN.md) · [Roadmap](docs/ROADMAP_CN.md)
 
 A standalone pH titration controller for the **UNIHIKER K10** (ESP32-S3). It automates acid–base titration with an adaptive pure-pulse dosing strategy, dual peristaltic pumps, a pH probe with ADS1115 ADC, and an I2C electronic scale.
 
@@ -65,6 +65,19 @@ From **SetupReady**, press **B** to enter calibration. The controller runs each 
 - Pump stops on boot, error, completion, emergency stop, and OTA start.
 - Sensor-fault detection (stuck ADC values 0 or 1023) triggers emergency stop.
 - Dual-stage filtering: EMA inside the pH driver + median-trimmed-mean (`PhFilter`) in the control loop.
+
+---
+
+## ToDo / Roadmap
+
+The project is evolving from a pH titrator into a general potentiometric titrator. Detailed tasks are tracked in [docs/ROADMAP_CN.md](docs/ROADMAP_CN.md). Current order:
+
+- [ ] Method presets for pH, mV, EDTA hardness, and manual methods.
+- [ ] Parameterized EP endpoint control: control band, hold time, stability threshold, and max time.
+- [ ] Web-side curves: browser records `/json` data, saves on the computer, and exports CSV/JSON.
+- [ ] Lightweight EQP analysis: compute slope from curve data and mark the equivalence point.
+- [ ] Result calculation for acid/base concentration, EDTA hardness, and manual factors.
+- [ ] Advanced features: learning titration, method workflow, blank values, sample series, and reports.
 
 ---
 

@@ -1,6 +1,6 @@
 # K10 pH 滴定仪
 
-[English](README.md) · [使用说明书](docs/MANUAL_CN.md) · [User Manual](docs/MANUAL.md)
+[English](README.md) · [使用说明书](docs/MANUAL_CN.md) · [User Manual](docs/MANUAL.md) · [后续路线图](docs/ROADMAP_CN.md)
 
 基于 **UNIHIKER K10**（ESP32-S3）的独立 pH 滴定控制器。采用自适应纯脉冲加药策略，配合双路蠕动泵、ADS1115 pH 探头和 I2C 电子秤，实现全自动酸碱滴定。
 
@@ -65,6 +65,19 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           电子秤 (0x64)
 - 启动、报错、完成、紧急停止、OTA 开始时自动停泵。
 - 传感器故障检测（ADC 卡死在 0 或 1023）触发紧急停止。
 - 两级滤波：pH 驱动内 EMA 一阶滤波 + 控制环中值截尾平均滤波 (`PhFilter`)。
+
+---
+
+## ToDo / 后续路线
+
+项目正在从 pH 滴定仪扩展为通用电位滴定仪。详细任务记录在 [docs/ROADMAP_CN.md](docs/ROADMAP_CN.md)，当前建议顺序：
+
+- [ ] 方法预设：保存 pH、mV、EDTA 硬度和手动方法。
+- [ ] EP 终点滴定参数化：控制区、滞后时间、稳定阈值、最长时间。
+- [ ] 网页曲线：浏览器记录 `/json` 数据，在电脑端保存并导出 CSV/JSON。
+- [ ] 轻量 EQP：基于曲线数据计算斜率并标记等当点。
+- [ ] 结果计算：支持酸碱浓度、EDTA 硬度和手动系数。
+- [ ] 高级能力：学习滴定、方法流程、空白值、系列样品和报告模板。
 
 ---
 
