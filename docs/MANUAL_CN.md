@@ -250,18 +250,26 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 在浏览器中打开控制器 IP 地址。
 
 ### 实时面板
-- **Current pH** — 大字体显示，有效时为绿色，预热时为黄色。
-- **mV** — 探头原始毫伏值。
+- **Current pH / Current mV** — 根据当前 endpoint 大字体显示 pH 或 mV，有效时为绿色，预热时为黄色。
+- 副行显示另一项信号，例如 mV 模式下副行显示 pH。
 - **State & status** — 当前状态机阶段。
 - **Pump indicator** — 加药时显示 `ON`（黄色），停止时显示 `STOP`（绿色）。
 
 ### 数据卡片
-- **Target** — 终点 pH。
+- **Target** — 当前 endpoint 的目标值，可能是 pH 或 mV。
 - **mV** — 探头电压。
-- **Mode** — 滴定剂类型。
+- **Trend** — 投加后信号应上升（RISE）或下降（FALL）。
 - **Used** — 已消耗滴定剂质量及进度条。
 - **Reactor** — 电子秤当前读数。
 - **Sample** — 已加入样品质量。
+
+### Run Data 曲线
+- 网页每 2 秒轮询 `/json`，在浏览器内存中记录本次运行数据。
+- 曲线默认按当前 endpoint 选择 y 轴：pH 方法显示 pH，mV 方法显示 mV。
+- x 轴可选择 `Used g` 或 `Time s`。
+- **Clear** 只清空浏览器中的曲线数据，不会改动 K10 设置。
+- **CSV** / **JSON** 将当前曲线数据下载到电脑，K10 不会把曲线写入 flash。
+- 刷新网页会清空浏览器内存中的曲线数据；需要保留实验记录时请先导出。
 
 ### 操作按钮
 - **Start / Resume** — 开始或继续滴定。
@@ -271,11 +279,18 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - **Emergency stop** — 立即停止一切。
 
 ### 设置项
-- **Mode**：Add base（加碱）/ Add acid（加酸）。
-- **Target pH**：0.00 – 14.00，步进 0.05。
-- **Max used g**：安全上限（默认 75 g）。
+- **Method**：pH endpoint、mV endpoint、EDTA hardness 或 Manual method。切换预设时页面会立即填入对应参数。
+- **Endpoint**：选择 pH 或 mV 作为控制信号。
+- **Signal trend**：投加后信号应上升或下降。
+- **Target pH / Target mV**：终点目标值。
+- **Control band**：进入控制区后开始减速。
+- **Stable delta/s**：静置时判断信号稳定的变化率阈值。
+- **Hold s**：达到终点后保持确认时间。
+- **Min / Max settle s**：每次加液后的最短/最长静置时间。
+- **Max time s**：最长滴定时间保护。
+- **Max used g**：安全上限。
 - **Sample g**：目标样品质量（默认 20.0 g）。
-- **Titrant**：0.01 M NaOH、0.01 M HCl 或 Manual（自定义摩尔浓度）。
+- **Titrant**：0.01 M NaOH、0.01 M HCl、0.01 M EDTA 或 Manual（自定义摩尔浓度）。
 - **WiFi**：STA 的 SSID 和密码。保存后自动重启。
 
 > 页面每 2 秒自动刷新，不会打断表单输入。

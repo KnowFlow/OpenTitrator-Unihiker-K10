@@ -250,18 +250,26 @@ The titration stops automatically when any of the following occurs:
 Open the controller IP in a browser.
 
 ### Live Panel
-- **Current pH** — large display, green when valid, yellow when warming up.
-- **mV** — raw probe millivolts.
+- **Current pH / Current mV** — large display follows the active endpoint. It shows pH in pH mode and mV in mV mode.
+- The secondary line shows the other signal, for example pH when mV is the active endpoint.
 - **State & status** — current state machine phase.
 - **Pump indicator** — `ON` (yellow) during pulses, `STOP` (green) otherwise.
 
 ### Metrics Cards
-- **Target** — endpoint pH.
+- **Target** — current endpoint target, either pH or mV.
 - **mV** — probe voltage.
-- **Mode** — titrant type.
+- **Trend** — whether dosing should make the signal rise or fall.
 - **Used** — titrant mass consumed with progress bar.
 - **Reactor** — current scale reading.
 - **Sample** — sample mass delivered.
+
+### Run Data Curve
+- The browser polls `/json` every 2 seconds and stores the current run data in browser memory.
+- The y axis defaults to the active endpoint: pH for pH methods, mV for mV methods.
+- The x axis can be `Used g` or `Time s`.
+- **Clear** only clears the browser-side curve data. It does not change K10 settings.
+- **CSV** / **JSON** downloads the current curve data to the computer. K10 does not write curve data to flash.
+- Refreshing the page clears the browser-memory curve, so export before refreshing if you need the record.
 
 ### Actions
 - **Start / Resume** — begins or resumes titration.
@@ -271,11 +279,18 @@ Open the controller IP in a browser.
 - **Emergency stop** — halts everything immediately.
 
 ### Settings
-- **Mode**: Add base / Add acid.
-- **Target pH**: 0.00 – 14.00, step 0.05.
-- **Max used g**: safety limit (default 75 g).
+- **Method**: pH endpoint, mV endpoint, EDTA hardness, or Manual method. Changing a preset immediately fills the related form values.
+- **Endpoint**: pH or mV control signal.
+- **Signal trend**: whether dosing should raise or lower the signal.
+- **Target pH / Target mV**: endpoint target.
+- **Control band**: slows dosing as the signal approaches the endpoint.
+- **Stable delta/s**: slope threshold used to decide whether the signal has settled.
+- **Hold s**: confirmation time after the endpoint is reached.
+- **Min / Max settle s**: minimum and maximum wait after each dose.
+- **Max time s**: maximum titration time protection.
+- **Max used g**: safety limit.
 - **Sample g**: target sample mass (default 20.0 g).
-- **Titrant**: 0.01 M NaOH, 0.01 M HCl, or Manual with custom molarity.
+- **Titrant**: 0.01 M NaOH, 0.01 M HCl, 0.01 M EDTA, or Manual with custom molarity.
 - **WiFi**: STA SSID and password. Saved to flash; controller restarts automatically.
 
 > The page updates live every 2 seconds without refreshing, so form inputs are not interrupted.

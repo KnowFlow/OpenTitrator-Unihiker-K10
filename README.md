@@ -58,6 +58,7 @@ From **SetupReady**, press **B** to enter calibration. The controller runs each 
 - **AP mode** is always on (`K10-pH-Titrator` / `12345678`).
 - Optional **STA WiFi** configurable from the web UI and persisted in flash.
 - Responsive web dashboard with live `/json` polling (2 s).
+- Browser-side titration curves with pH/mV plotting and CSV/JSON export to the computer.
 - **HTTP OTA** via `POST /ota` for browser-less firmware updates.
 - Arduino OTA (UDP 3232) also available.
 
@@ -72,9 +73,9 @@ From **SetupReady**, press **B** to enter calibration. The controller runs each 
 
 The project is evolving from a pH titrator into a general potentiometric titrator. Detailed tasks are tracked in [docs/ROADMAP_CN.md](docs/ROADMAP_CN.md). Current order:
 
-- [ ] Method presets for pH, mV, EDTA hardness, and manual methods.
-- [ ] Parameterized EP endpoint control: control band, hold time, stability threshold, and max time.
-- [ ] Web-side curves: browser records `/json` data, saves on the computer, and exports CSV/JSON.
+- [x] Method presets for pH, mV, EDTA hardness, and manual methods.
+- [x] Parameterized EP endpoint control: control band, hold time, stability threshold, and max time.
+- [x] Web-side curves: browser records `/json` data, saves on the computer, and exports CSV/JSON.
 - [ ] Lightweight EQP analysis: compute slope from curve data and mark the equivalence point.
 - [ ] Result calculation for acid/base concentration, EDTA hardness, and manual factors.
 - [ ] Advanced features: learning titration, method workflow, blank values, sample series, and reports.

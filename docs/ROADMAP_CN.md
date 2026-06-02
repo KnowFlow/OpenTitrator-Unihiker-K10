@@ -60,9 +60,9 @@
 
 目标：网页端记录滴定过程数据，形成曲线和可导出的实验记录。
 
-- [ ] 浏览器每 1-2 秒轮询 `/json`。
-- [ ] 在网页内保存本次运行数据数组，不写入 K10 flash。
-- [ ] 记录字段：
+- [x] 浏览器每 1-2 秒轮询 `/json`。
+- [x] 在网页内保存本次运行数据数组，不写入 K10 flash。
+- [x] 记录字段：
   - timestamp
   - elapsed seconds
   - pH
@@ -74,19 +74,19 @@
   - trend
   - state
   - pump state / pulse
-- [ ] 显示曲线：
+- [x] 显示曲线：
   - x 轴：used grams 或 elapsed seconds
   - y 轴：pH 或 mV，根据 endpoint 默认选择
-- [ ] 支持导出：
+- [x] 支持导出：
   - CSV
   - JSON
-- [ ] 支持 reset 清空本地曲线数据。
+- [x] 支持 reset 清空本地曲线数据。
 
 验收：
 
-- [ ] 刷新页面前，曲线数据持续累积，不因轮询丢失。
-- [ ] Reset 后曲线和 sample 数据都清零。
-- [ ] 导出的 CSV 可在 Excel 中打开。
+- [x] 刷新页面前，曲线数据持续累积，不因轮询丢失。
+- [x] Reset 后曲线和 sample 数据都清零。
+- [x] 导出的 CSV 可在 Excel 中打开。
 
 ## M4 轻量 EQP 等当点分析
 

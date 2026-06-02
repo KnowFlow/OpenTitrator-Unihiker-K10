@@ -1319,7 +1319,7 @@ void scheduleRestart(const String &message) {
 
 String htmlPage() {
   String page;
-  page.reserve(11000);
+  page.reserve(20000);
   int usedPercent = (int)constrain((consumedGrams / settings.maxConsumedGrams) * 100.0f, 0.0f, 100.0f);
   page += F("<!doctype html><html><head><meta charset='utf-8'>");
   page += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
@@ -1330,7 +1330,7 @@ String htmlPage() {
   page += F(".hero{border:1px solid var(--line);border-radius:10px;background:linear-gradient(135deg,#0f2630,#081219);padding:18px;margin-bottom:12px;display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.ph{font-size:72px;line-height:.95;font-weight:800}.unit{font-size:18px;color:var(--muted);margin-left:6px}.sub{color:var(--muted);margin-top:10px}.status{display:grid;gap:8px;align-content:center}.status b{font-size:22px}");
   page += F(".grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.card{border:1px solid var(--line);border-radius:8px;padding:13px;background:rgba(13,29,36,.9)}.k{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.07em}.v{font-size:28px;font-weight:700;margin-top:5px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}");
   page += F(".bar{height:10px;background:#071014;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-top:10px}.fill{height:100%;background:linear-gradient(90deg,var(--ok),var(--warn))}.split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}label{display:grid;gap:5px;color:var(--muted);font-size:12px;min-width:130px;flex:1}");
-  page += F("button,.btn,input,select{font:inherit;border-radius:7px;border:1px solid #3a6472;background:#0a1a21;color:var(--text);padding:10px 12px;text-decoration:none}button,.btn{display:inline-block;cursor:pointer;font-weight:700}.primary{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.danger{background:#351216;border-color:#8c3640;color:#ffd1d1}.ghost{color:var(--blue)}h2{margin:0 0 10px;font-size:16px}.tiny{font-size:12px;color:var(--muted)}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tab{background:#071820;color:var(--blue)}.tab.active{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.panel{display:none}.panel.active{display:block}.full{margin-top:10px}.mini{max-width:170px}@media(max-width:720px){.hero,.split{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.ph{font-size:58px}.top{display:block}.pill{justify-content:flex-start;margin-top:8px}.pill span{border-radius:7px}}</style></head><body><main>");
+  page += F("button,.btn,input,select{font:inherit;border-radius:7px;border:1px solid #3a6472;background:#0a1a21;color:var(--text);padding:10px 12px;text-decoration:none}button,.btn{display:inline-block;cursor:pointer;font-weight:700}.primary{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.danger{background:#351216;border-color:#8c3640;color:#ffd1d1}.ghost{color:var(--blue)}h2{margin:0 0 10px;font-size:16px}.tiny{font-size:12px;color:var(--muted)}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tab{background:#071820;color:var(--blue)}.tab.active{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.panel{display:none}.panel.active{display:block}.full{margin-top:10px}.mini{max-width:170px}.chart{width:100%;height:260px;border:1px solid var(--line);border-radius:8px;background:#071014}.chartbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:10px}.chartbar label{min-width:110px;max-width:180px}@media(max-width:720px){.hero,.split{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.ph{font-size:58px}.top{display:block}.pill{justify-content:flex-start;margin-top:8px}.pill span{border-radius:7px}}</style></head><body><main>");
   page += F("<style>.ph,.v,#status,#mv{font-variant-numeric:tabular-nums}.ph{min-height:72px}.sub{min-height:22px}</style>");
 
   page += F("<div class='top'><div><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>Potentiometric Titrator</div></div><div id='network' class='pill'>");
@@ -1423,7 +1423,12 @@ String htmlPage() {
   page += htmlEscape(staIpAddress);
   page += F(" / OTA host ");
   page += htmlEscape(String(OTA_HOSTNAME));
-  page += F("</p><p class='tiny'><a class='ghost' href='/json'>JSON status</a></p></div></section>");
+  page += F("</p><p class='tiny'><a class='ghost' href='/json'>JSON status</a></p></div>");
+  page += F("<div class='card full'><h2>Run Data</h2><div class='chartbar'>");
+  page += F("<label>X axis<select id='chartX'><option value='used'>Used g</option><option value='time'>Time s</option></select></label>");
+  page += F("<label>Y axis<select id='chartY'><option value='auto'>Endpoint</option><option value='ph'>pH</option><option value='mv'>mV</option></select></label>");
+  page += F("<button id='curveClear' type='button'>Clear</button><button id='curveCsv' type='button'>CSV</button><button id='curveJson' type='button'>JSON</button>");
+  page += F("</div><canvas id='curveCanvas' class='chart' width='820' height='260'></canvas><p id='curveInfo' class='tiny'>0 points</p></div></section>");
 
   page += F("<section id='tab-cal' class='panel'><div class='card full'><h2>Calibration Actions</h2><div class='row'>");
   page += F("<a class='btn' href='/action?cmd=ready'>Enter ready</a>");
@@ -1529,6 +1534,10 @@ String htmlPage() {
   page += F("<script>");
   page += F("function text(id,v){var e=document.getElementById(id);if(e)e.textContent=v}");
   page += F("function html(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v}");
+  page += F("var curve=[],curveStart=0;function num(v){return Number(v||0)}function curveTarget(d){return d.endpoint==='mV'?num(d.target_mv):num(d.target_ph)}");
+  page += F("function recordCurve(d){if(!d.adc_ok)return;var now=Date.now();if(!curveStart)curveStart=now;curve.push({ts:new Date(now).toISOString(),elapsed_s:(now-curveStart)/1000,ph:num(d.ph),mv:num(d.mv),used_g:num(d.used_g),sample_g:num(d.sample_delivered_g),endpoint:d.endpoint,target:curveTarget(d),trend:d.mode,state:d.state,pump:!!d.pump,pulse_ms:num(d.pump_pulse_ms),status:d.status,method:d.method});if(curve.length>2000)curve.shift();drawCurve()}");
+  page += F("function drawCurve(){var c=document.getElementById('curveCanvas');if(!c)return;var g=c.getContext('2d'),w=c.width,h=c.height;g.clearRect(0,0,w,h);g.fillStyle='#071014';g.fillRect(0,0,w,h);g.strokeStyle='#244c59';g.lineWidth=1;g.strokeRect(38,12,w-50,h-42);text('curveInfo',curve.length+' points');if(curve.length<2)return;var xs=document.getElementById('chartX'),ys=document.getElementById('chartY');var xk=xs&&xs.value==='time'?'elapsed_s':'used_g';var ysel=ys?ys.value:'auto';var yk=ysel==='auto'?(curve[curve.length-1].endpoint==='mV'?'mv':'ph'):ysel;var minx=curve[0][xk],maxx=curve[curve.length-1][xk];var miny=curve[0][yk],maxy=miny;curve.forEach(function(p){if(p[xk]<minx)minx=p[xk];if(p[xk]>maxx)maxx=p[xk];if(p[yk]<miny)miny=p[yk];if(p[yk]>maxy)maxy=p[yk]});if(maxx===minx)maxx=minx+1;if(maxy===miny)maxy=miny+1;var px=function(x){return 38+(x-minx)/(maxx-minx)*(w-50)};var py=function(y){return h-30-(y-miny)/(maxy-miny)*(h-42)};g.strokeStyle='#67f09a';g.lineWidth=2;g.beginPath();curve.forEach(function(p,i){var x=px(p[xk]),y=py(p[yk]);if(i)g.lineTo(x,y);else g.moveTo(x,y)});g.stroke();g.fillStyle='#8db0bd';g.font='12px Verdana';g.fillText(xk==='used_g'?'used g':'time s',w-92,h-8);g.fillText(yk,8,18);g.fillText(miny.toFixed(yk==='ph'?2:0),4,h-32);g.fillText(maxy.toFixed(yk==='ph'?2:0),4,22)}");
+  page += F("function exportCurve(fmt){if(!curve.length)return;var data,mime,name;if(fmt==='json'){data=JSON.stringify(curve,null,2);mime='application/json';name='titration-data.json'}else{var keys=Object.keys(curve[0]);data=keys.join(',')+'\\n'+curve.map(function(r){return keys.map(function(k){return String(r[k]).replace(/\"/g,'\"\"')}).join(',')}).join('\\n');mime='text/csv';name='titration-data.csv'}var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type:mime}));a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},1000)}");
   page += F("async function poll(){try{let r=await fetch('/json',{cache:'no-store'});let d=await r.json();");
   page += F("let mvMode=d.endpoint==='mV';text('primarylabel','Current '+d.endpoint);text('primaryunit',d.endpoint);");
   page += F("text('primaryvalue',d.adc_ok?(mvMode?Number(d.mv).toFixed(0):Number(d.ph).toFixed(2)):(mvMode?'--':'--.--'));");
@@ -1544,9 +1553,11 @@ String htmlPage() {
   page += F("text('netdetail','AP '+d.ap_ip+' / STA '+d.sta_ip+' / OTA host k10-ph-titrator');");
   page += F("let f=document.querySelector('.fill');if(f)f.style.width=Math.max(0,Math.min(100,used/max*100))+'%';");
   page += F("text('titrantgps',Number(d.titrant_gps).toFixed(3));text('samplegps',Number(d.sample_gps).toFixed(3));");
+  page += F("recordCurve(d);");
   page += F("}catch(e){}}setInterval(poll,2000);");
   page += F("function activateTab(name){var p=document.getElementById('tab-'+name);if(!p)return;document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.tab===name)});document.querySelectorAll('.panel').forEach(function(x){x.classList.remove('active')});p.classList.add('active')}");
   page += F("document.querySelectorAll('.tab').forEach(function(b){b.onclick=function(){activateTab(b.dataset.tab);location.hash=b.dataset.tab}});var initial=(location.hash||'#run').slice(1);activateTab(initial);");
+  page += F("['chartX','chartY'].forEach(function(id){var e=document.getElementById(id);if(e)e.onchange=drawCurve});var cc=document.getElementById('curveClear');if(cc)cc.onclick=function(){curve=[];curveStart=0;drawCurve()};var ec=document.getElementById('curveCsv');if(ec)ec.onclick=function(){exportCurve('csv')};var ej=document.getElementById('curveJson');if(ej)ej.onclick=function(){exportCurve('json')};drawCurve();");
   page += F("var presets={ph_ep:{endpoint:'ph',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'naoh001',titrant_m:'0.0100',control_band:'0.300',stable_delta:'0.005',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},mv_ep:{endpoint:'mv',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'manual',titrant_m:'0.0100',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},edta_hardness:{endpoint:'mv',trend:'fall',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'edta001',titrant_m:'0.0100',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'}};");
   page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m);setv('controlBandInput',p.control_band);setv('stableDeltaInput',p.stable_delta);setv('holdInput',p.hold_s);setv('minSettleInput',p.min_settle_s);setv('maxSettleInput',p.max_settle_s);setv('maxTimeInput',p.max_time_s)});");
   page += F("var mf=document.getElementById('manualForm');if(mf)mf.addEventListener('submit',async function(e){e.preventDefault();var fd=new FormData(mf);var cmd=e.submitter&&e.submitter.name?e.submitter.value:fd.get('cmd');fd.set('cmd',cmd);fd.set('ajax','1');try{await fetch('/action?'+new URLSearchParams(fd).toString(),{cache:'no-store'});poll()}catch(err){}});");
@@ -1894,7 +1905,7 @@ void handleJson() {
   json += ",\"state\":\"" + stateLabel() + "\"";
   json += ",\"status\":\"" + jsonEscape(statusLine) + "\"";
   json += ",\"pump\":" + String(pump.isRunning() ? "true" : "false");
-  json += ",\"pump_pulse_ms\":" + String(pump.isRunning() ? 1 : 0);
+  json += ",\"pump_pulse_ms\":" + String(pump.isRunning() ? activePulseMs : 0);
   json += ",\"sample_pump\":" + String(samplePump.isRunning() ? "true" : "false");
   json += ",\"filter_ready\":" + String(phFilter.ready() ? "true" : "false");
   json += ",\"sensor_fault\":" + String(sensorFault ? "true" : "false");
