@@ -547,7 +547,7 @@ float initialBottleWeight = 0.0f;
 float sampleStartWeight = 0.0f;
 float sampleDeliveredGrams = 0.0f;
 float consumedGrams = 0.0f;
-float resultConcentrationM = 0.0f;
+float resultValue = 0.0f;
 uint32_t stateStartedMs = 0;
 uint32_t runStartedMs = 0;
 uint32_t endpointHoldStartedMs = 0;
@@ -625,6 +625,42 @@ String titrantLabel() {
 
 float activeTitrantMolarity() {
   return titrantMolarityForPreset(settings.titrantPreset, settings.titrantMolarity);
+}
+
+const char *resultFormulaValue(ResultFormula formula) {
+  switch (formula) {
+    case ResultFormula::AcidBaseMolar: return "acid_base_m";
+    case ResultFormula::EdtaHardnessCaCO3: return "edta_hardness";
+    case ResultFormula::ManualFactor: return "manual_factor";
+  }
+  return "acid_base_m";
+}
+
+String resultFormulaLabel() {
+  switch (settings.resultFormula) {
+    case ResultFormula::AcidBaseMolar: return "Acid/base mol/L";
+    case ResultFormula::EdtaHardnessCaCO3: return "EDTA hardness";
+    case ResultFormula::ManualFactor: return "Manual factor";
+  }
+  return "Acid/base mol/L";
+}
+
+String resultUnit() {
+  switch (settings.resultFormula) {
+    case ResultFormula::AcidBaseMolar: return "mol/L";
+    case ResultFormula::EdtaHardnessCaCO3: return "mg/L as CaCO3";
+    case ResultFormula::ManualFactor: return "manual";
+  }
+  return "mol/L";
+}
+
+uint8_t resultDecimals() {
+  switch (settings.resultFormula) {
+    case ResultFormula::AcidBaseMolar: return 5;
+    case ResultFormula::EdtaHardnessCaCO3: return 1;
+    case ResultFormula::ManualFactor: return 4;
+  }
+  return 5;
 }
 
 void resetRunData();
@@ -708,6 +744,9 @@ bool methodMatchesPreset(TitrationMethod method) {
          absoluteFloat(preset.maxConsumedGrams - settings.maxConsumedGrams) <= 0.001f &&
          absoluteFloat(preset.sampleGrams - settings.sampleGrams) <= 0.001f &&
          absoluteFloat(preset.titrantMolarity - settings.titrantMolarity) <= 0.00001f &&
+         preset.resultFormula == settings.resultFormula &&
+         absoluteFloat(preset.blankGrams - settings.blankGrams) <= 0.001f &&
+         absoluteFloat(preset.manualResultFactor - settings.manualResultFactor) <= 0.001f &&
          absoluteFloat(preset.controlBand - settings.controlBand) <= 0.001f &&
          absoluteFloat(preset.stableDelta - settings.stableDelta) <= 0.001f &&
          preset.holdSeconds == settings.holdSeconds &&
@@ -776,7 +815,7 @@ void resetRunData() {
   sampleDeliveredGrams = 0.0f;
   initialBottleWeight = scaleReady ? lastScale.grams : 0.0f;
   consumedGrams = 0.0f;
-  resultConcentrationM = 0.0f;
+  resultValue = 0.0f;
   phReady = false;
   phSampleFresh = false;
   stopReason = TitrationStopReason::None;
@@ -803,7 +842,7 @@ bool startTitration() {
   sampleDeliveredGrams = 0.0f;
   initialBottleWeight = lastScale.grams;
   consumedGrams = 0.0f;
-  resultConcentrationM = 0.0f;
+  resultValue = 0.0f;
   runStartedMs = 0;
   endpointHoldStartedMs = 0;
   phReady = false;
@@ -1235,7 +1274,7 @@ void runController() {
     if (holdMs == 0 || millis() - endpointHoldStartedMs >= holdMs) {
       pump.stop();
       stopReason = TitrationStopReason::TargetReached;
-      resultConcentrationM = computeSampleConcentrationMolar(activeTitrantMolarity(), consumedGrams, settings.sampleGrams);
+      resultValue = computeTitrationResult(settings, activeTitrantMolarity(), consumedGrams, settings.sampleGrams);
       setState(RunState::Done, reasonLabel(stopReason));
     } else {
       pump.stop();
@@ -1261,7 +1300,7 @@ void runController() {
     if (wasRunning) {
       setState(RunState::Settling, "Settling");
     } else {
-      resultConcentrationM = computeSampleConcentrationMolar(activeTitrantMolarity(), consumedGrams, settings.sampleGrams);
+      resultValue = computeTitrationResult(settings, activeTitrantMolarity(), consumedGrams, settings.sampleGrams);
       setState(RunState::Done, reasonLabel(stopReason));
     }
   } else {
@@ -1330,7 +1369,7 @@ String htmlPage() {
   page += F(".hero{border:1px solid var(--line);border-radius:10px;background:linear-gradient(135deg,#0f2630,#081219);padding:18px;margin-bottom:12px;display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.ph{font-size:72px;line-height:.95;font-weight:800}.unit{font-size:18px;color:var(--muted);margin-left:6px}.sub{color:var(--muted);margin-top:10px}.status{display:grid;gap:8px;align-content:center}.status b{font-size:22px}");
   page += F(".grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.card{border:1px solid var(--line);border-radius:8px;padding:13px;background:rgba(13,29,36,.9)}.k{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.07em}.v{font-size:28px;font-weight:700;margin-top:5px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}");
   page += F(".bar{height:10px;background:#071014;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-top:10px}.fill{height:100%;background:linear-gradient(90deg,var(--ok),var(--warn))}.split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}label{display:grid;gap:5px;color:var(--muted);font-size:12px;min-width:130px;flex:1}");
-  page += F("button,.btn,input,select{font:inherit;border-radius:7px;border:1px solid #3a6472;background:#0a1a21;color:var(--text);padding:10px 12px;text-decoration:none}button,.btn{display:inline-block;cursor:pointer;font-weight:700}.primary{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.danger{background:#351216;border-color:#8c3640;color:#ffd1d1}.ghost{color:var(--blue)}h2{margin:0 0 10px;font-size:16px}.tiny{font-size:12px;color:var(--muted)}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tab{background:#071820;color:var(--blue)}.tab.active{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.panel{display:none}.panel.active{display:block}.full{margin-top:10px}.mini{max-width:170px}.chart{width:100%;height:260px;border:1px solid var(--line);border-radius:8px;background:#071014}.chartbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:10px}.chartbar label{min-width:110px;max-width:180px}@media(max-width:720px){.hero,.split{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.ph{font-size:58px}.top{display:block}.pill{justify-content:flex-start;margin-top:8px}.pill span{border-radius:7px}}</style></head><body><main>");
+  page += F("button,.btn,input,select{font:inherit;border-radius:7px;border:1px solid #3a6472;background:#0a1a21;color:var(--text);padding:10px 12px;text-decoration:none}button,.btn{display:inline-block;cursor:pointer;font-weight:700}.primary{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.danger{background:#351216;border-color:#8c3640;color:#ffd1d1}.ghost{color:var(--blue)}h2{margin:0 0 10px;font-size:16px}.tiny{font-size:12px;color:var(--muted)}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tab{background:#071820;color:var(--blue)}.tab.active{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.panel{display:none}.panel.active{display:block}.full{margin-top:10px}.mini{max-width:170px}.chart{width:100%;height:260px;border:1px solid var(--line);border-radius:8px;background:#071014;cursor:crosshair}.chartbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:10px}.chartbar label{min-width:110px;max-width:180px}.eqp{color:var(--warn);font-weight:700}.guide{display:grid;grid-template-columns:1fr 1fr;gap:10px}.guide p{margin:7px 0}.term{color:var(--blue);font-weight:700}@media(max-width:720px){.hero,.split,.guide{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.ph{font-size:58px}.top{display:block}.pill{justify-content:flex-start;margin-top:8px}.pill span{border-radius:7px}}</style></head><body><main>");
   page += F("<style>.ph,.v,#status,#mv{font-variant-numeric:tabular-nums}.ph{min-height:72px}.sub{min-height:22px}</style>");
 
   page += F("<div class='top'><div><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>Potentiometric Titrator</div></div><div id='network' class='pill'>");
@@ -1402,7 +1441,7 @@ String htmlPage() {
   page += String(settings.sampleGrams, 1);
   page += F(" g</div></div></section>");
 
-  page += F("<nav class='tabs'><button class='tab active' data-tab='run' type='button'>Run</button><button class='tab' data-tab='cal' type='button'>Calibration</button><button class='tab' data-tab='manual' type='button'>Manual</button><button class='tab' data-tab='admin' type='button'>Admin</button></nav>");
+  page += F("<nav class='tabs'><button class='tab active' data-tab='run' type='button'>Run</button><button class='tab' data-tab='cal' type='button'>Calibration</button><button class='tab' data-tab='manual' type='button'>Manual</button><button class='tab' data-tab='admin' type='button'>Admin</button><button class='tab' data-tab='guide' type='button'>Guide</button></nav>");
   page += F("<section id='tab-run' class='panel active'><div class='card full'><h2>Actions</h2><div class='row'>");
   page += state == RunState::Paused ? F("<a class='btn primary' href='/action?cmd=start'>Resume</a>") : F("<a class='btn primary' href='/action?cmd=start'>Start</a>");
   page += F("<a class='btn' href='/action?cmd=stop'>Pause</a>");
@@ -1425,10 +1464,10 @@ String htmlPage() {
   page += htmlEscape(String(OTA_HOSTNAME));
   page += F("</p><p class='tiny'><a class='ghost' href='/json'>JSON status</a></p></div>");
   page += F("<div class='card full'><h2>Run Data</h2><div class='chartbar'>");
-  page += F("<label>X axis<select id='chartX'><option value='used'>Used g</option><option value='time'>Time s</option></select></label>");
+  page += F("<label>X axis<select id='chartX'><option value='time'>Time s</option><option value='used'>Used g</option></select></label>");
   page += F("<label>Y axis<select id='chartY'><option value='auto'>Endpoint</option><option value='ph'>pH</option><option value='mv'>mV</option></select></label>");
-  page += F("<button id='curveClear' type='button'>Clear</button><button id='curveCsv' type='button'>CSV</button><button id='curveJson' type='button'>JSON</button>");
-  page += F("</div><canvas id='curveCanvas' class='chart' width='820' height='260'></canvas><p id='curveInfo' class='tiny'>0 points</p></div></section>");
+  page += F("<button id='curveClear' type='button'>Clear</button><button id='eqpAuto' type='button'>Auto EQP</button><button id='curveCsv' type='button'>CSV</button><button id='curveJson' type='button'>JSON</button>");
+  page += F("</div><canvas id='curveCanvas' class='chart' width='820' height='260'></canvas><p id='curveInfo' class='tiny'>0 points</p><p id='eqpInfo' class='tiny'>EQP waits for dose changes. Click the curve to correct the candidate point.</p></div></section>");
 
   page += F("<section id='tab-cal' class='panel'><div class='card full'><h2>Calibration Actions</h2><div class='row'>");
   page += F("<a class='btn' href='/action?cmd=ready'>Enter ready</a>");
@@ -1501,6 +1540,16 @@ String htmlPage() {
   page += F(">Manual</option></select></label>");
   page += F("<label>Manual mol/L<input id='titrantMInput' name='titrant_m' type='number' min='0.0001' max='10' step='0.0001' value='");
   page += String(settings.titrantMolarity, 4);
+  page += F("'></label><label>Result formula<select id='resultFormulaSelect' name='result_formula'><option value='acid_base_m'");
+  if (settings.resultFormula == ResultFormula::AcidBaseMolar) page += F(" selected");
+  page += F(">Acid/base mol/L</option><option value='edta_hardness'");
+  if (settings.resultFormula == ResultFormula::EdtaHardnessCaCO3) page += F(" selected");
+  page += F(">EDTA hardness</option><option value='manual_factor'");
+  if (settings.resultFormula == ResultFormula::ManualFactor) page += F(" selected");
+  page += F(">Manual factor</option></select></label><label>Blank g<input id='blankInput' name='blank_g' type='number' min='0' max='1000' step='0.01' value='");
+  page += String(settings.blankGrams, 2);
+  page += F("'></label></div><div class='row' style='margin-top:10px'><label>Manual factor<input id='manualFactorInput' name='manual_factor' type='number' min='-1000000' max='1000000' step='0.0001' value='");
+  page += String(settings.manualResultFactor, 4);
   page += F("'></label><label>Control band<input id='controlBandInput' name='control_band' type='number' min='0.001' max='1000' step='0.001' value='");
   page += String(settings.controlBand, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
   page += F("'></label><label>Stable delta/s<input id='stableDeltaInput' name='stable_delta' type='number' min='0.001' max='1000' step='0.001' value='");
@@ -1517,8 +1566,10 @@ String htmlPage() {
   page += F("'></label></div><p class='tiny'>Active titrant: <span id='titrant'>");
   page += htmlEscape(titrantLabel());
   page += F("</span> / result <span id='resultm'>");
-  page += String(resultConcentrationM, 5);
-  page += F("</span> mol/L</p><p class='tiny'>Titrant flow <span id='titrantgps'>");
+  page += String(resultValue, (unsigned int)resultDecimals());
+  page += F("</span> <span id='resultunit'>");
+  page += htmlEscape(resultUnit());
+  page += F("</span></p><p class='tiny'>Titrant flow <span id='titrantgps'>");
   page += String(titrantPumpFlowRateGps, 3);
   page += F("</span> g/s / Sample flow <span id='samplegps'>");
   page += String(samplePumpFlowRateGps, 3);
@@ -1531,13 +1582,23 @@ String htmlPage() {
   page += F("<label>Password<input name='wifi_password' type='password' maxlength='64' placeholder='Leave blank to keep'></label>");
   page += F("</div><p class='tiny'>AP stays on. Blank SSID disables STA. Changing WiFi restarts the controller.</p>");
   page += F("<button class='primary' type='submit'>Save WiFi</button></form></div></div></section>");
+  page += F("<section id='tab-guide' class='panel'><div class='guide'>");
+  page += F("<div class='card'><h2>Method and Endpoint</h2><p><span class='term'>Method</span> loads a preset group of endpoint, titrant, result formula, and control defaults. Manual keeps custom values.</p><p><span class='term'>Endpoint</span> selects the control signal. Use pH for acid/base endpoint work, or mV for potentiometric endpoints.</p><p><span class='term'>Signal trend</span> tells the controller whether dosing should raise or lower the endpoint signal.</p><p><span class='term'>Target pH / mV</span> is the EP stop value. Only the active endpoint is used for control.</p></div>");
+  page += F("<div class='card'><h2>Endpoint Control</h2><p><span class='term'>Control band</span> is the near-target zone. Larger values slow dosing earlier; smaller values dose faster but risk overshoot.</p><p><span class='term'>Stable delta/s</span> is the allowed signal drift while settling. Lower values wait for a flatter response.</p><p><span class='term'>Hold s</span> confirms the endpoint after it is reached. If the signal moves back out, dosing resumes.</p><p><span class='term'>Min / Max settle s</span> controls wait time after each pulse. Slow probes or slow reactions need longer settling.</p><p><span class='term'>Max time s</span> stops a run that takes too long.</p></div>");
+  page += F("<div class='card'><h2>Dosing and Results</h2><p><span class='term'>Titrant</span> selects the known solution. Manual mol/L is used only when titrant is Manual.</p><p><span class='term'>Max used g</span> is the safety limit for titrant consumption.</p><p><span class='term'>Sample g</span> is the sample mass delivered by the P1 pump before titration.</p><p><span class='term'>Result formula</span> controls only calculation and display; it does not change pump control.</p><p><span class='term'>Blank g</span> subtracts blank titration consumption before calculating.</p><p><span class='term'>Manual factor</span> uses result = net titrant g x factor / sample g for custom tests.</p></div>");
+  page += F("<div class='card'><h2>Run Data and EQP</h2><p><span class='term'>Time s</span> is the safer default X axis because data keeps moving even while used g is unchanged.</p><p><span class='term'>Used g</span> is useful for final analysis after enough dose changes have happened.</p><p><span class='term'>Auto EQP</span> marks the largest d(signal)/d(used g) candidate. It is an analysis point, not an automatic stop command.</p><p>Click the curve to manually correct the EQP point, then export CSV or JSON to save the run on the computer.</p></div>");
+  page += F("</div></section>");
   page += F("<script>");
   page += F("function text(id,v){var e=document.getElementById(id);if(e)e.textContent=v}");
   page += F("function html(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v}");
-  page += F("var curve=[],curveStart=0;function num(v){return Number(v||0)}function curveTarget(d){return d.endpoint==='mV'?num(d.target_mv):num(d.target_ph)}");
-  page += F("function recordCurve(d){if(!d.adc_ok)return;var now=Date.now();if(!curveStart)curveStart=now;curve.push({ts:new Date(now).toISOString(),elapsed_s:(now-curveStart)/1000,ph:num(d.ph),mv:num(d.mv),used_g:num(d.used_g),sample_g:num(d.sample_delivered_g),endpoint:d.endpoint,target:curveTarget(d),trend:d.mode,state:d.state,pump:!!d.pump,pulse_ms:num(d.pump_pulse_ms),status:d.status,method:d.method});if(curve.length>2000)curve.shift();drawCurve()}");
-  page += F("function drawCurve(){var c=document.getElementById('curveCanvas');if(!c)return;var g=c.getContext('2d'),w=c.width,h=c.height;g.clearRect(0,0,w,h);g.fillStyle='#071014';g.fillRect(0,0,w,h);g.strokeStyle='#244c59';g.lineWidth=1;g.strokeRect(38,12,w-50,h-42);text('curveInfo',curve.length+' points');if(curve.length<2)return;var xs=document.getElementById('chartX'),ys=document.getElementById('chartY');var xk=xs&&xs.value==='time'?'elapsed_s':'used_g';var ysel=ys?ys.value:'auto';var yk=ysel==='auto'?(curve[curve.length-1].endpoint==='mV'?'mv':'ph'):ysel;var minx=curve[0][xk],maxx=curve[curve.length-1][xk];var miny=curve[0][yk],maxy=miny;curve.forEach(function(p){if(p[xk]<minx)minx=p[xk];if(p[xk]>maxx)maxx=p[xk];if(p[yk]<miny)miny=p[yk];if(p[yk]>maxy)maxy=p[yk]});if(maxx===minx)maxx=minx+1;if(maxy===miny)maxy=miny+1;var px=function(x){return 38+(x-minx)/(maxx-minx)*(w-50)};var py=function(y){return h-30-(y-miny)/(maxy-miny)*(h-42)};g.strokeStyle='#67f09a';g.lineWidth=2;g.beginPath();curve.forEach(function(p,i){var x=px(p[xk]),y=py(p[yk]);if(i)g.lineTo(x,y);else g.moveTo(x,y)});g.stroke();g.fillStyle='#8db0bd';g.font='12px Verdana';g.fillText(xk==='used_g'?'used g':'time s',w-92,h-8);g.fillText(yk,8,18);g.fillText(miny.toFixed(yk==='ph'?2:0),4,h-32);g.fillText(maxy.toFixed(yk==='ph'?2:0),4,22)}");
-  page += F("function exportCurve(fmt){if(!curve.length)return;var data,mime,name;if(fmt==='json'){data=JSON.stringify(curve,null,2);mime='application/json';name='titration-data.json'}else{var keys=Object.keys(curve[0]);data=keys.join(',')+'\\n'+curve.map(function(r){return keys.map(function(k){return String(r[k]).replace(/\"/g,'\"\"')}).join(',')}).join('\\n');mime='text/csv';name='titration-data.csv'}var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type:mime}));a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},1000)}");
+  page += F("var curve=[],curveStart=0,eqpManual=null,lastPlot=[];function num(v){return Number(v||0)}function curveTarget(d){return d.endpoint==='mV'?num(d.target_mv):num(d.target_ph)}");
+  page += F("function recordCurve(d){if(!d.adc_ok)return;var now=Date.now();if(!curveStart)curveStart=now;curve.push({ts:new Date(now).toISOString(),elapsed_s:(now-curveStart)/1000,ph:num(d.ph),mv:num(d.mv),used_g:num(d.used_g),sample_g:num(d.sample_delivered_g),endpoint:d.endpoint,target:curveTarget(d),trend:d.mode,state:d.state,pump:!!d.pump,pulse_ms:num(d.pump_pulse_ms),status:d.status,method:d.method,result_value:num(d.result_value),result_unit:d.result_unit,result_formula:d.result_formula,blank_g:num(d.blank_g),manual_factor:num(d.manual_factor)});if(curve.length>2000)curve.shift();drawCurve()}");
+  page += F("function dosePoints(){var pts=[];curve.forEach(function(p){if(!isFinite(p.used_g))return;if(pts.length&&Math.abs(p.used_g-pts[pts.length-1].used_g)<0.01){pts[pts.length-1]=p}else pts.push(p)});return pts}");
+  page += F("function analyzeEqp(){var pts=dosePoints();if(pts.length<3)return null;var yk=pts[pts.length-1].endpoint==='mV'?'mv':'ph',best=null;for(var i=1;i<pts.length;i++){var dx=pts[i].used_g-pts[i-1].used_g;if(Math.abs(dx)<0.01)continue;var dy=pts[i][yk]-pts[i-1][yk],s=Math.abs(dy/dx);if(!best||s>best.slope){best={mode:'auto',index:i,used_g:pts[i].used_g,elapsed_s:pts[i].elapsed_s,signal:pts[i][yk],ph:pts[i].ph,mv:pts[i].mv,endpoint:pts[i].endpoint,slope:s}}}return best}");
+  page += F("function currentEqp(){var a=analyzeEqp();return eqpManual||a}function eqpText(e){if(!e)return 'EQP waits for at least 3 dose-change points.';var v=e.endpoint==='mV'?e.signal.toFixed(0)+' mV':e.signal.toFixed(2)+' pH';return (e.mode==='manual'?'Manual':'Auto')+' EQP: '+e.used_g.toFixed(2)+' g, '+v+', slope '+e.slope.toFixed(e.endpoint==='mV'?1:3)+' '+e.endpoint+'/g'}");
+  page += F("function drawCurve(){var c=document.getElementById('curveCanvas');if(!c)return;var r=c.getBoundingClientRect();if(r.width>0&&c.width!==Math.floor(r.width)){c.width=Math.floor(r.width);c.height=260}var g=c.getContext('2d'),w=c.width,h=c.height,l=58,t=18,ri=18,b=36;lastPlot=[];g.clearRect(0,0,w,h);g.fillStyle='#071014';g.fillRect(0,0,w,h);g.strokeStyle='#244c59';g.lineWidth=1;g.strokeRect(l,t,w-l-ri,h-t-b);text('curveInfo',curve.length+' points');text('eqpInfo',eqpText(currentEqp()));if(curve.length<2)return;var xs=document.getElementById('chartX'),ys=document.getElementById('chartY');var xk=xs&&xs.value==='used'?'used_g':'elapsed_s';var ysel=ys?ys.value:'auto';var yk=ysel==='auto'?(curve[curve.length-1].endpoint==='mV'?'mv':'ph'):ysel;var pts=[];curve.forEach(function(p){if(xk==='used_g'&&pts.length&&Math.abs(p.used_g-pts[pts.length-1].used_g)<0.01){pts[pts.length-1]=p}else pts.push(p)});if(pts.length<2){text('curveInfo',curve.length+' points / waiting for '+(xk==='used_g'?'dose change':'more samples'));return}var minx=pts[0][xk],maxx=pts[0][xk],miny=pts[0][yk],maxy=miny;pts.forEach(function(p){if(p[xk]<minx)minx=p[xk];if(p[xk]>maxx)maxx=p[xk];if(p[yk]<miny)miny=p[yk];if(p[yk]>maxy)maxy=p[yk]});if(maxx===minx)maxx=minx+1;if(maxy===miny)maxy=miny+1;var ypad=(maxy-miny)*0.08;miny-=ypad;maxy+=ypad;var px=function(x){return l+(x-minx)/(maxx-minx)*(w-l-ri)};var py=function(y){return h-b-(y-miny)/(maxy-miny)*(h-t-b)};g.strokeStyle='#67f09a';g.lineWidth=2;g.beginPath();pts.forEach(function(p,i){var x=px(p[xk]),y=py(p[yk]);lastPlot.push({x:x,y:y,p:p,yk:yk});if(i)g.lineTo(x,y);else g.moveTo(x,y)});g.stroke();var e=currentEqp();if(e){var ex=px(xk==='used_g'?e.used_g:e.elapsed_s),ey=py(yk==='mv'?e.mv:e.ph);g.strokeStyle='#ffd15c';g.fillStyle='#ffd15c';g.lineWidth=1;g.beginPath();g.moveTo(ex,t);g.lineTo(ex,h-b);g.stroke();g.beginPath();g.arc(ex,ey,5,0,6.283);g.fill()}g.fillStyle='#8db0bd';g.font='12px Verdana';g.fillText(xk==='used_g'?'used g':'time s',w-86,h-10);g.fillText(yk,l,13);g.fillText(miny.toFixed(yk==='ph'?2:0),8,h-b);g.fillText(maxy.toFixed(yk==='ph'?2:0),8,t+5)}");
+  page += F("function chooseEqpAt(ev){if(!lastPlot.length)return;var c=ev.currentTarget,r=c.getBoundingClientRect(),x=(ev.clientX-r.left)*c.width/r.width,y=(ev.clientY-r.top)*c.height/r.height,b=null;lastPlot.forEach(function(pt){var d=(pt.x-x)*(pt.x-x)+(pt.y-y)*(pt.y-y);if(!b||d<b.d)b={d:d,pt:pt}});if(!b)return;var auto=analyzeEqp(),p=b.pt.p,yk=b.pt.yk;eqpManual={mode:'manual',used_g:p.used_g,elapsed_s:p.elapsed_s,signal:p[yk],ph:p.ph,mv:p.mv,endpoint:yk==='mv'?'mV':'pH',slope:auto?auto.slope:0};drawCurve()}");
+  page += F("function exportCurve(fmt){if(!curve.length)return;var eqp=currentEqp();var data,mime,name;if(fmt==='json'){data=JSON.stringify({eqp:eqp,points:curve},null,2);mime='application/json';name='titration-data.json'}else{var keys=Object.keys(curve[0]).concat(['eqp_used_g','eqp_signal','eqp_slope','eqp_mode']);data=keys.join(',')+'\\n'+curve.map(function(r){return keys.map(function(k){var v=k==='eqp_used_g'&&eqp?eqp.used_g:k==='eqp_signal'&&eqp?eqp.signal:k==='eqp_slope'&&eqp?eqp.slope:k==='eqp_mode'&&eqp?eqp.mode:r[k];return String(v===undefined?'':v).replace(/\"/g,'\"\"')}).join(',')}).join('\\n');mime='text/csv';name='titration-data.csv'}var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type:mime}));a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},1000)}");
   page += F("async function poll(){try{let r=await fetch('/json',{cache:'no-store'});let d=await r.json();");
   page += F("let mvMode=d.endpoint==='mV';text('primarylabel','Current '+d.endpoint);text('primaryunit',d.endpoint);");
   page += F("text('primaryvalue',d.adc_ok?(mvMode?Number(d.mv).toFixed(0):Number(d.ph).toFixed(2)):(mvMode?'--':'--.--'));");
@@ -1547,7 +1608,7 @@ String htmlPage() {
   page += F("text('targetunit',d.endpoint);text('target',d.endpoint==='mV'?Number(d.target_mv).toFixed(0):Number(d.target_ph).toFixed(2));text('mvcard',d.adc_ok?Number(d.mv).toFixed(0):'--');text('mode',d.mode);");
   page += F("let used=Number(d.used_g),max=Number(d.max_g);text('used',used.toFixed(1)+' g');text('limit','Limit '+max.toFixed(0)+' g');");
   page += F("text('sample',Number(d.sample_delivered_g).toFixed(1)+' g');text('sampletarget','Target '+Number(d.sample_g).toFixed(1)+' g');");
-  page += F("text('titrant',d.titrant);text('resultm',Number(d.result_m).toFixed(5));");
+  page += F("text('titrant',d.titrant);var rd=d.result_formula==='edta_hardness'?1:(d.result_formula==='manual_factor'?4:5);text('resultm',Number(d.result_value).toFixed(rd));text('resultunit',d.result_unit);");
   page += F("text('bottle',d.bottle_g>=0?Number(d.bottle_g).toFixed(1)+' g':'-- g');");
   page += F("html('network','<span>'+d.network+'</span><span>AP '+d.ap_ip+'</span><span>STA '+d.sta_ip+'</span><span>OTA '+(d.ota?'ON':'OFF')+'</span>');");
   page += F("text('netdetail','AP '+d.ap_ip+' / STA '+d.sta_ip+' / OTA host k10-ph-titrator');");
@@ -1557,9 +1618,9 @@ String htmlPage() {
   page += F("}catch(e){}}setInterval(poll,2000);");
   page += F("function activateTab(name){var p=document.getElementById('tab-'+name);if(!p)return;document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.tab===name)});document.querySelectorAll('.panel').forEach(function(x){x.classList.remove('active')});p.classList.add('active')}");
   page += F("document.querySelectorAll('.tab').forEach(function(b){b.onclick=function(){activateTab(b.dataset.tab);location.hash=b.dataset.tab}});var initial=(location.hash||'#run').slice(1);activateTab(initial);");
-  page += F("['chartX','chartY'].forEach(function(id){var e=document.getElementById(id);if(e)e.onchange=drawCurve});var cc=document.getElementById('curveClear');if(cc)cc.onclick=function(){curve=[];curveStart=0;drawCurve()};var ec=document.getElementById('curveCsv');if(ec)ec.onclick=function(){exportCurve('csv')};var ej=document.getElementById('curveJson');if(ej)ej.onclick=function(){exportCurve('json')};drawCurve();");
-  page += F("var presets={ph_ep:{endpoint:'ph',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'naoh001',titrant_m:'0.0100',control_band:'0.300',stable_delta:'0.005',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},mv_ep:{endpoint:'mv',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'manual',titrant_m:'0.0100',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},edta_hardness:{endpoint:'mv',trend:'fall',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'edta001',titrant_m:'0.0100',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'}};");
-  page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m);setv('controlBandInput',p.control_band);setv('stableDeltaInput',p.stable_delta);setv('holdInput',p.hold_s);setv('minSettleInput',p.min_settle_s);setv('maxSettleInput',p.max_settle_s);setv('maxTimeInput',p.max_time_s)});");
+  page += F("['chartX','chartY'].forEach(function(id){var e=document.getElementById(id);if(e)e.onchange=drawCurve});var cv=document.getElementById('curveCanvas');if(cv)cv.onclick=chooseEqpAt;var ea=document.getElementById('eqpAuto');if(ea)ea.onclick=function(){eqpManual=null;drawCurve()};var cc=document.getElementById('curveClear');if(cc)cc.onclick=function(){curve=[];curveStart=0;eqpManual=null;drawCurve()};var ec=document.getElementById('curveCsv');if(ec)ec.onclick=function(){exportCurve('csv')};var ej=document.getElementById('curveJson');if(ej)ej.onclick=function(){exportCurve('json')};drawCurve();");
+  page += F("var presets={ph_ep:{endpoint:'ph',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'naoh001',titrant_m:'0.0100',result_formula:'acid_base_m',blank_g:'0.00',manual_factor:'1.0000',control_band:'0.300',stable_delta:'0.005',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},mv_ep:{endpoint:'mv',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'manual',titrant_m:'0.0100',result_formula:'manual_factor',blank_g:'0.00',manual_factor:'1.0000',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},edta_hardness:{endpoint:'mv',trend:'fall',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'edta001',titrant_m:'0.0100',result_formula:'edta_hardness',blank_g:'0.00',manual_factor:'1.0000',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'}};");
+  page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m);setv('resultFormulaSelect',p.result_formula);setv('blankInput',p.blank_g);setv('manualFactorInput',p.manual_factor);setv('controlBandInput',p.control_band);setv('stableDeltaInput',p.stable_delta);setv('holdInput',p.hold_s);setv('minSettleInput',p.min_settle_s);setv('maxSettleInput',p.max_settle_s);setv('maxTimeInput',p.max_time_s)});");
   page += F("var mf=document.getElementById('manualForm');if(mf)mf.addEventListener('submit',async function(e){e.preventDefault();var fd=new FormData(mf);var cmd=e.submitter&&e.submitter.name?e.submitter.value:fd.get('cmd');fd.set('cmd',cmd);fd.set('ajax','1');try{await fetch('/action?'+new URLSearchParams(fd).toString(),{cache:'no-store'});poll()}catch(err){}});");
   page += F("</script></main></body></html>");
   return page;
@@ -1653,6 +1714,27 @@ void handleSet() {
     float nextMolarity = constrain(server.arg("titrant_m").toFloat(), 0.0001f, 10.0f);
     methodFieldChanged = methodFieldChanged || absoluteFloat(nextMolarity - settings.titrantMolarity) > 0.00001f;
     settings.titrantMolarity = nextMolarity;
+  }
+  if (server.hasArg("result_formula")) {
+    String formula = server.arg("result_formula");
+    ResultFormula nextFormula = ResultFormula::AcidBaseMolar;
+    if (formula == "edta_hardness") {
+      nextFormula = ResultFormula::EdtaHardnessCaCO3;
+    } else if (formula == "manual_factor") {
+      nextFormula = ResultFormula::ManualFactor;
+    }
+    methodFieldChanged = methodFieldChanged || nextFormula != settings.resultFormula;
+    settings.resultFormula = nextFormula;
+  }
+  if (server.hasArg("blank_g")) {
+    float nextBlank = constrain(server.arg("blank_g").toFloat(), 0.0f, 1000.0f);
+    methodFieldChanged = methodFieldChanged || absoluteFloat(nextBlank - settings.blankGrams) > 0.001f;
+    settings.blankGrams = nextBlank;
+  }
+  if (server.hasArg("manual_factor")) {
+    float nextFactor = constrain(server.arg("manual_factor").toFloat(), -1000000.0f, 1000000.0f);
+    methodFieldChanged = methodFieldChanged || absoluteFloat(nextFactor - settings.manualResultFactor) > 0.001f;
+    settings.manualResultFactor = nextFactor;
   }
   if (server.hasArg("control_band")) {
     float nextBand = constrain(server.arg("control_band").toFloat(), 0.001f, 1000.0f);
@@ -1888,7 +1970,12 @@ void handleJson() {
   json += ",\"sample_delivered_g\":" + String(sampleDeliveredGrams, 1);
   json += ",\"titrant\":\"" + jsonEscape(titrantLabel()) + "\"";
   json += ",\"titrant_m\":" + String(activeTitrantMolarity(), 5);
-  json += ",\"result_m\":" + String(resultConcentrationM, 5);
+  json += ",\"result_m\":" + String(settings.resultFormula == ResultFormula::AcidBaseMolar ? resultValue : 0.0f, 5);
+  json += ",\"result_value\":" + String(resultValue, (unsigned int)resultDecimals());
+  json += ",\"result_unit\":\"" + jsonEscape(resultUnit()) + "\"";
+  json += ",\"result_formula\":\"" + String(resultFormulaValue(settings.resultFormula)) + "\"";
+  json += ",\"blank_g\":" + String(settings.blankGrams, 2);
+  json += ",\"manual_factor\":" + String(settings.manualResultFactor, 4);
   json += ",\"method\":\"" + String(methodValue(currentMethod)) + "\"";
   json += ",\"method_label\":\"" + jsonEscape(methodLabel(currentMethod)) + "\"";
   json += ",\"endpoint\":\"" + String(endpointText()) + "\"";
@@ -2183,8 +2270,8 @@ void drawDisplay() {
   snprintf(line, sizeof(line), "PULSE %s  S %.1f/%.1f", pump.isRunning() ? "ON" : "off", sampleDeliveredGrams, settings.sampleGrams);
   k10.canvas->canvasText(line, 11, pump.isRunning() || samplePump.isRunning() ? COLOR_WARN : COLOR_MUTED);
 
-  snprintf(line, sizeof(line), "RESULT %.5fM", resultConcentrationM);
-  k10.canvas->canvasText(line, 12, resultConcentrationM > 0.0f ? COLOR_OK : COLOR_MUTED);
+  snprintf(line, sizeof(line), "RESULT %.*f", resultDecimals(), resultValue);
+  k10.canvas->canvasText(line, 12, resultValue > 0.0f ? COLOR_OK : COLOR_MUTED);
 
   snprintf(line, sizeof(line), "ADC %s  SCALE %s", lastPh.adcOk ? "OK" : "NO", scaleReady ? "OK" : "NO");
   k10.canvas->canvasText(line, 13, (lastPh.adcOk && scaleReady) ? COLOR_MUTED : COLOR_WARN);

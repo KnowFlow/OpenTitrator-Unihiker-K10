@@ -32,6 +32,12 @@ enum class TitrationMethod : uint8_t {
   Manual
 };
 
+enum class ResultFormula : uint8_t {
+  AcidBaseMolar,
+  EdtaHardnessCaCO3,
+  ManualFactor
+};
+
 enum class TitrationAction : uint8_t {
   Dose,
   Done,
@@ -59,6 +65,9 @@ struct TitrationSettings {
   float maxConsumedGrams = 20.0f;
   float sampleGrams = 20.0f;
   float titrantMolarity = 0.01f;
+  ResultFormula resultFormula = ResultFormula::AcidBaseMolar;
+  float blankGrams = 0.0f;
+  float manualResultFactor = 1.0f;
   float controlBand = 0.30f;
   float stableDelta = 0.005f;
   uint16_t holdSeconds = 5;
@@ -283,6 +292,9 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       settings.targetMillivolts = 0.0f;
       settings.titrantPreset = TitrantPreset::Naoh001;
       settings.titrantMolarity = 0.01f;
+      settings.resultFormula = ResultFormula::AcidBaseMolar;
+      settings.blankGrams = 0.0f;
+      settings.manualResultFactor = 1.0f;
       settings.maxConsumedGrams = 20.0f;
       settings.sampleGrams = 20.0f;
       settings.controlBand = 0.30f;
@@ -299,6 +311,9 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       settings.targetMillivolts = 0.0f;
       settings.titrantPreset = TitrantPreset::Manual;
       settings.titrantMolarity = 0.01f;
+      settings.resultFormula = ResultFormula::ManualFactor;
+      settings.blankGrams = 0.0f;
+      settings.manualResultFactor = 1.0f;
       settings.maxConsumedGrams = 20.0f;
       settings.sampleGrams = 20.0f;
       settings.controlBand = 30.0f;
@@ -315,6 +330,9 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       settings.targetMillivolts = 0.0f;
       settings.titrantPreset = TitrantPreset::Edta001;
       settings.titrantMolarity = 0.01f;
+      settings.resultFormula = ResultFormula::EdtaHardnessCaCO3;
+      settings.blankGrams = 0.0f;
+      settings.manualResultFactor = 1.0f;
       settings.maxConsumedGrams = 20.0f;
       settings.sampleGrams = 20.0f;
       settings.controlBand = 30.0f;
@@ -326,8 +344,14 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       break;
     case TitrationMethod::Manual:
       settings.titrantPreset = TitrantPreset::Manual;
+      settings.resultFormula = ResultFormula::ManualFactor;
       break;
   }
+}
+
+inline float netTitrantGrams(float titrantUsedGrams, float blankGrams) {
+  float net = titrantUsedGrams - blankGrams;
+  return net > 0.0f ? net : 0.0f;
 }
 
 inline float computeSampleConcentrationMolar(
@@ -338,6 +362,44 @@ inline float computeSampleConcentrationMolar(
     return 0.0f;
   }
   return titrantMolarity * titrantUsedGrams / sampleGrams;
+}
+
+inline float computeEdtaHardnessCaCO3MgL(
+    float edtaMolarity,
+    float titrantUsedGrams,
+    float sampleGrams) {
+  if (edtaMolarity <= 0.0f || titrantUsedGrams <= 0.0f || sampleGrams <= 0.0f) {
+    return 0.0f;
+  }
+  constexpr float caco3MilligramsPerMillimole = 100.0869f;
+  return edtaMolarity * titrantUsedGrams * caco3MilligramsPerMillimole * 1000.0f / sampleGrams;
+}
+
+inline float computeManualFactorResult(
+    float titrantUsedGrams,
+    float sampleGrams,
+    float manualResultFactor) {
+  if (titrantUsedGrams <= 0.0f || sampleGrams <= 0.0f || manualResultFactor == 0.0f) {
+    return 0.0f;
+  }
+  return titrantUsedGrams * manualResultFactor / sampleGrams;
+}
+
+inline float computeTitrationResult(
+    const TitrationSettings &settings,
+    float titrantMolarity,
+    float titrantUsedGrams,
+    float sampleGrams) {
+  const float netUsed = netTitrantGrams(titrantUsedGrams, settings.blankGrams);
+  switch (settings.resultFormula) {
+    case ResultFormula::AcidBaseMolar:
+      return computeSampleConcentrationMolar(titrantMolarity, netUsed, sampleGrams);
+    case ResultFormula::EdtaHardnessCaCO3:
+      return computeEdtaHardnessCaCO3MgL(titrantMolarity, netUsed, sampleGrams);
+    case ResultFormula::ManualFactor:
+      return computeManualFactorResult(netUsed, sampleGrams, settings.manualResultFactor);
+  }
+  return 0.0f;
 }
 
 inline float mapLinear(float value, float inLow, float inHigh, float outLow, float outHigh) {

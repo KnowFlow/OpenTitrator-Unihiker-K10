@@ -34,6 +34,16 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           Scale (0x64)
 
 ## Software Highlights
 
+### Web Screenshots
+
+| Run | Calibration | Manual |
+|-----|-------------|--------|
+| ![Run tab](docs/screenshots/web-run.png) | ![Calibration tab](docs/screenshots/web-cal.png) | ![Manual tab](docs/screenshots/web-manual.png) |
+
+| Admin | Guide |
+|-------|-------|
+| ![Admin tab](docs/screenshots/web-admin.png) | ![Guide tab](docs/screenshots/web-guide.png) |
+
 ### Adaptive Pure-Pulse Titration
 Instead of continuous PWM, the controller doses the titrant in **timed pulses** whose length and settle time adapt to how far the current pH is from the target:
 
@@ -76,8 +86,8 @@ The project is evolving from a pH titrator into a general potentiometric titrato
 - [x] Method presets for pH, mV, EDTA hardness, and manual methods.
 - [x] Parameterized EP endpoint control: control band, hold time, stability threshold, and max time.
 - [x] Web-side curves: browser records `/json` data, saves on the computer, and exports CSV/JSON.
-- [ ] Lightweight EQP analysis: compute slope from curve data and mark the equivalence point.
-- [ ] Result calculation for acid/base concentration, EDTA hardness, and manual factors.
+- [x] Lightweight EQP analysis: compute slope from curve data and mark the equivalence point.
+- [x] Result calculation for acid/base concentration, EDTA hardness, and manual factors.
 - [ ] Advanced features: learning titration, method workflow, blank values, sample series, and reports.
 
 ---

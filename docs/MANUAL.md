@@ -237,8 +237,9 @@ The titration stops automatically when any of the following occurs:
 | Scale disconnect | Error | Scale error |
 
 **Result display**:
-- `RESULT 0.00307M` shows the calculated sample concentration in mol/L.
-- Formula: `C_sample = C_titrant × mass_titrant / mass_sample`
+- Acid/base formula: `C_sample = C_titrant × (mass_titrant - blank_mass) / mass_sample`, in mol/L.
+- EDTA hardness formula: reported as CaCO3 mg/L, approximating aqueous solutions as `1 g = 1 mL`.
+- Manual formula: `result = (mass_titrant - blank_mass) × manual_factor / mass_sample` for custom experiments.
 
 **After Done/Error**:
 - Press **AB short** to reset and return to **SetupMode**.
@@ -268,7 +269,10 @@ Open the controller IP in a browser.
 - The y axis defaults to the active endpoint: pH for pH methods, mV for mV methods.
 - The x axis can be `Used g` or `Time s`.
 - **Clear** only clears the browser-side curve data. It does not change K10 settings.
+- **Auto EQP** computes the maximum `d(signal)/d(used_g)` slope between dose-change points and marks the candidate equivalence point with a yellow line and dot.
+- Click a plotted point to manually correct the EQP candidate; click **Auto EQP** again to clear the manual correction.
 - **CSV** / **JSON** downloads the current curve data to the computer. K10 does not write curve data to flash.
+- CSV / JSON exports include the current EQP candidate, signal value, and maximum slope.
 - Refreshing the page clears the browser-memory curve, so export before refreshing if you need the record.
 
 ### Actions
@@ -291,7 +295,13 @@ Open the controller IP in a browser.
 - **Max used g**: safety limit.
 - **Sample g**: target sample mass (default 20.0 g).
 - **Titrant**: 0.01 M NaOH, 0.01 M HCl, 0.01 M EDTA, or Manual with custom molarity.
+- **Result formula**: acid/base concentration, EDTA total hardness (mg/L as CaCO3), or manual factor.
+- **Blank g**: blank titration consumption subtracted from titrant use before calculation.
+- **Manual factor**: conversion factor used by the manual result formula.
 - **WiFi**: STA SSID and password. Saved to flash; controller restarts automatically.
+
+### Guide Parameter Notes
+- The **Guide** tab summarizes Method, Endpoint, control band, settle timing, result formulas, Run Data, and EQP tuning notes for quick reference during experiments.
 
 > The page updates live every 2 seconds without refreshing, so form inputs are not interrupted.
 

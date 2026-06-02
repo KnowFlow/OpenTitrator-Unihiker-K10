@@ -246,6 +246,20 @@ void setup() {
   expectNear(titrantMolarityForPreset(TitrantPreset::Edta001, 0.2f), 0.01f, 0.001f, "EDTA preset uses 0.01 mol/L");
   expectNear(titrantMolarityForPreset(TitrantPreset::Manual, 0.05f), 0.05f, 0.001f, "manual titrant molarity is used");
   expectNear(computeSampleConcentrationMolar(0.01f, 4.0f, 40.0f), 0.001f, 0.000001f, "sample concentration uses titrant molarity and mass ratio");
+  expectNear(netTitrantGrams(4.0f, 0.5f), 3.5f, 0.001f, "blank correction subtracts titrant use");
+  expectNear(netTitrantGrams(0.4f, 0.5f), 0.0f, 0.001f, "blank correction clamps negative titrant use");
+  expectNear(computeEdtaHardnessCaCO3MgL(0.01f, 2.0f, 50.0f), 40.03476f, 0.001f, "EDTA hardness reports CaCO3 mg/L");
+  expectNear(computeManualFactorResult(2.0f, 40.0f, 100.0f), 5.0f, 0.001f, "manual factor result scales net titrant by sample");
+
+  settings.resultFormula = ResultFormula::EdtaHardnessCaCO3;
+  settings.blankGrams = 0.5f;
+  expectNear(computeTitrationResult(settings, 0.01f, 2.5f, 50.0f), 40.03476f, 0.001f, "result formula applies blank-corrected EDTA hardness");
+  settings.resultFormula = ResultFormula::ManualFactor;
+  settings.manualResultFactor = 100.0f;
+  expectNear(computeTitrationResult(settings, 0.01f, 2.5f, 40.0f), 5.0f, 0.001f, "result formula applies manual factor");
+  settings.resultFormula = ResultFormula::AcidBaseMolar;
+  settings.blankGrams = 0.0f;
+  settings.manualResultFactor = 1.0f;
 
   {
     TitrationSettings methodSettings;
@@ -253,16 +267,19 @@ void setup() {
     expectTrue(methodSettings.endpoint == ControlEndpoint::Ph, "pH method uses pH endpoint");
     expectTrue(methodSettings.controlTrend == ControlTrend::Increase, "pH method uses rising signal");
     expectTrue(methodSettings.titrantPreset == TitrantPreset::Naoh001, "pH method uses NaOH preset");
+    expectTrue(methodSettings.resultFormula == ResultFormula::AcidBaseMolar, "pH method uses molar result");
 
     applyTitrationMethodPreset(methodSettings, TitrationMethod::MvEndpoint);
     expectTrue(methodSettings.endpoint == ControlEndpoint::Millivolts, "mV method uses mV endpoint");
     expectTrue(methodSettings.controlTrend == ControlTrend::Increase, "mV method uses rising signal");
     expectTrue(methodSettings.titrantPreset == TitrantPreset::Manual, "mV method uses manual titrant");
+    expectTrue(methodSettings.resultFormula == ResultFormula::ManualFactor, "mV method uses manual factor result");
 
     applyTitrationMethodPreset(methodSettings, TitrationMethod::EdtaHardness);
     expectTrue(methodSettings.endpoint == ControlEndpoint::Millivolts, "EDTA method uses mV endpoint");
     expectTrue(methodSettings.controlTrend == ControlTrend::Decrease, "EDTA method uses falling signal");
     expectTrue(methodSettings.titrantPreset == TitrantPreset::Edta001, "EDTA method uses EDTA preset");
+    expectTrue(methodSettings.resultFormula == ResultFormula::EdtaHardnessCaCO3, "EDTA method uses hardness result");
 
     methodSettings.targetMillivolts = 123.0f;
     applyTitrationMethodPreset(methodSettings, TitrationMethod::Manual);

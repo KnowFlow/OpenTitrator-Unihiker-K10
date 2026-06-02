@@ -34,6 +34,16 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           电子秤 (0x64)
 
 ## 软件亮点
 
+### 网页截图
+
+| Run | Calibration | Manual |
+|-----|-------------|--------|
+| ![Run tab](docs/screenshots/web-run.png) | ![Calibration tab](docs/screenshots/web-cal.png) | ![Manual tab](docs/screenshots/web-manual.png) |
+
+| Admin | Guide |
+|-------|-------|
+| ![Admin tab](docs/screenshots/web-admin.png) | ![Guide tab](docs/screenshots/web-guide.png) |
+
 ### 自适应纯脉冲滴定策略
 控制器不再使用连续 PWM，而是根据当前 pH 与目标值的距离，自动选择**脉冲时长**和**静置等待时间**：
 
@@ -76,8 +86,8 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           电子秤 (0x64)
 - [x] 方法预设：保存 pH、mV、EDTA 硬度和手动方法。
 - [x] EP 终点滴定参数化：控制区、滞后时间、稳定阈值、最长时间。
 - [x] 网页曲线：浏览器记录 `/json` 数据，在电脑端保存并导出 CSV/JSON。
-- [ ] 轻量 EQP：基于曲线数据计算斜率并标记等当点。
-- [ ] 结果计算：支持酸碱浓度、EDTA 硬度和手动系数。
+- [x] 轻量 EQP：基于曲线数据计算斜率并标记等当点。
+- [x] 结果计算：支持酸碱浓度、EDTA 硬度和手动系数。
 - [ ] 高级能力：学习滴定、方法流程、空白值、系列样品和报告模板。
 
 ---
