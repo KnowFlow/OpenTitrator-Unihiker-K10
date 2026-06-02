@@ -207,6 +207,30 @@ int main() {
   expectNear(titrantMolarityForPreset(TitrantPreset::Edta001, 0.2f), 0.01f, 0.001f, "EDTA preset uses 0.01 mol/L");
   expectNear(titrantMolarityForPreset(TitrantPreset::Manual, 0.05f), 0.05f, 0.001f, "manual titrant molarity is used");
   expectNear(computeSampleConcentrationMolar(0.01f, 4.0f, 40.0f), 0.001f, 0.000001f, "sample concentration uses titrant molarity and mass ratio");
+
+  {
+    TitrationSettings methodSettings;
+    applyTitrationMethodPreset(methodSettings, TitrationMethod::PhEndpoint);
+    expectTrue(methodSettings.endpoint == ControlEndpoint::Ph, "pH method uses pH endpoint");
+    expectTrue(methodSettings.controlTrend == ControlTrend::Increase, "pH method uses rising signal");
+    expectTrue(methodSettings.titrantPreset == TitrantPreset::Naoh001, "pH method uses NaOH preset");
+
+    applyTitrationMethodPreset(methodSettings, TitrationMethod::MvEndpoint);
+    expectTrue(methodSettings.endpoint == ControlEndpoint::Millivolts, "mV method uses mV endpoint");
+    expectTrue(methodSettings.controlTrend == ControlTrend::Increase, "mV method uses rising signal");
+    expectTrue(methodSettings.titrantPreset == TitrantPreset::Manual, "mV method uses manual titrant");
+
+    applyTitrationMethodPreset(methodSettings, TitrationMethod::EdtaHardness);
+    expectTrue(methodSettings.endpoint == ControlEndpoint::Millivolts, "EDTA method uses mV endpoint");
+    expectTrue(methodSettings.controlTrend == ControlTrend::Decrease, "EDTA method uses falling signal");
+    expectTrue(methodSettings.titrantPreset == TitrantPreset::Edta001, "EDTA method uses EDTA preset");
+
+    methodSettings.targetMillivolts = 123.0f;
+    applyTitrationMethodPreset(methodSettings, TitrationMethod::Manual);
+    expectTrue(methodSettings.titrantPreset == TitrantPreset::Manual, "manual method uses manual titrant");
+    expectNear(methodSettings.targetMillivolts, 123.0f, 0.001f, "manual method keeps current endpoint target");
+  }
+
   expectNear(computeProbeMillivoltsFromAdsInput(1329.3334f), -59.0f, 0.1f, "alkaline calibration maps ADS input to probe millivolts");
   expectNear(computeProbeMillivoltsFromAdsInput(2387.3333f), 296.0f, 0.1f, "acid calibration maps ADS input to probe millivolts");
   expectNear(computePhFromProbeMillivolts(-58.0f), 8.11f, 0.01f, "probe millivolts maps to calibrated pH");

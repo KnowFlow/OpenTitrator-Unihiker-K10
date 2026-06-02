@@ -13,13 +13,13 @@
 
 目标：把当前分散设置整理为可复用的方法。
 
-- [ ] 增加方法选择 UI。
-- [ ] 支持保存/加载至少 4 个方法：
+- [x] 增加方法选择 UI。
+- [x] 支持保存/加载至少 4 个方法：
   - pH 酸碱滴定
   - mV 电位滴定
   - EDTA 硬度滴定
   - 手动自定义方法
-- [ ] 每个方法保存：
+- [x] 每个方法保存：
   - endpoint: `pH` / `mV`
   - target value
   - signal trend: `RISE` / `FALL`
@@ -28,13 +28,13 @@
   - max used grams
   - EP 控制参数
   - result formula preset
-- [ ] 切换方法时更新网页设置，并重置运行状态。
+- [x] 切换方法时更新网页设置，并重置运行状态。
 
 验收：
 
-- [ ] 切换方法后 `/json` 返回对应 endpoint、target、trend、titrant。
-- [ ] 重启后保留最后选中的方法。
-- [ ] 不影响现有 pH 模式滴定。
+- [x] 切换方法后 `/json` 返回对应 endpoint、target、trend、titrant。
+- [x] 重启后保留最后选中的方法。
+- [x] 不影响现有 pH 模式滴定。
 
 ## M2 EP 终点滴定参数化
 
@@ -148,4 +148,3 @@
 4. M4 轻量 EQP 等当点分析
 5. M5 结果计算和硬度测试
 6. M6 可选高级能力
-

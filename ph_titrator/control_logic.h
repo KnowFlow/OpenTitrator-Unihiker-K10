@@ -25,6 +25,13 @@ enum class TitrantPreset : uint8_t {
   Manual
 };
 
+enum class TitrationMethod : uint8_t {
+  PhEndpoint,
+  MvEndpoint,
+  EdtaHardness,
+  Manual
+};
+
 enum class TitrationAction : uint8_t {
   Dose,
   Done,
@@ -229,6 +236,45 @@ inline float titrantMolarityForPreset(TitrantPreset preset, float manualMolarity
       return manualMolarity > 0.0f ? manualMolarity : 0.0f;
   }
   return 0.0f;
+}
+
+inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMethod method) {
+  switch (method) {
+    case TitrationMethod::PhEndpoint:
+      settings.endpoint = ControlEndpoint::Ph;
+      settings.controlTrend = ControlTrend::Increase;
+      settings.mode = TitrationMode::AddBase;
+      settings.targetPh = 7.00f;
+      settings.targetMillivolts = 0.0f;
+      settings.titrantPreset = TitrantPreset::Naoh001;
+      settings.titrantMolarity = 0.01f;
+      settings.maxConsumedGrams = 20.0f;
+      settings.sampleGrams = 20.0f;
+      break;
+    case TitrationMethod::MvEndpoint:
+      settings.endpoint = ControlEndpoint::Millivolts;
+      settings.controlTrend = ControlTrend::Increase;
+      settings.mode = TitrationMode::AddBase;
+      settings.targetMillivolts = 0.0f;
+      settings.titrantPreset = TitrantPreset::Manual;
+      settings.titrantMolarity = 0.01f;
+      settings.maxConsumedGrams = 20.0f;
+      settings.sampleGrams = 20.0f;
+      break;
+    case TitrationMethod::EdtaHardness:
+      settings.endpoint = ControlEndpoint::Millivolts;
+      settings.controlTrend = ControlTrend::Decrease;
+      settings.mode = TitrationMode::AddAcid;
+      settings.targetMillivolts = 0.0f;
+      settings.titrantPreset = TitrantPreset::Edta001;
+      settings.titrantMolarity = 0.01f;
+      settings.maxConsumedGrams = 20.0f;
+      settings.sampleGrams = 20.0f;
+      break;
+    case TitrationMethod::Manual:
+      settings.titrantPreset = TitrantPreset::Manual;
+      break;
+  }
 }
 
 inline float computeSampleConcentrationMolar(

@@ -532,6 +532,7 @@ PumpController pump;
 PumpController samplePump;
 
 TitrationSettings settings;
+TitrationMethod currentMethod = TitrationMethod::PhEndpoint;
 RunState state = RunState::SetupMode;
 RunState pausedFromState = RunState::Running;
 TitrationStopReason stopReason = TitrationStopReason::None;
@@ -622,6 +623,89 @@ String titrantLabel() {
 
 float activeTitrantMolarity() {
   return titrantMolarityForPreset(settings.titrantPreset, settings.titrantMolarity);
+}
+
+void resetRunData();
+
+const char *methodValue(TitrationMethod method) {
+  switch (method) {
+    case TitrationMethod::PhEndpoint: return "ph_ep";
+    case TitrationMethod::MvEndpoint: return "mv_ep";
+    case TitrationMethod::EdtaHardness: return "edta_hardness";
+    case TitrationMethod::Manual: return "manual";
+  }
+  return "ph_ep";
+}
+
+String methodLabel(TitrationMethod method) {
+  switch (method) {
+    case TitrationMethod::PhEndpoint: return "pH endpoint";
+    case TitrationMethod::MvEndpoint: return "mV endpoint";
+    case TitrationMethod::EdtaHardness: return "EDTA hardness";
+    case TitrationMethod::Manual: return "Manual method";
+  }
+  return "pH endpoint";
+}
+
+TitrationMethod methodFromValue(const String &value) {
+  if (value == "mv_ep") {
+    return TitrationMethod::MvEndpoint;
+  }
+  if (value == "edta_hardness") {
+    return TitrationMethod::EdtaHardness;
+  }
+  if (value == "manual") {
+    return TitrationMethod::Manual;
+  }
+  return TitrationMethod::PhEndpoint;
+}
+
+void saveSelectedMethod() {
+  if (preferences.begin("method", false)) {
+    preferences.putUChar("selected", (uint8_t)currentMethod);
+    preferences.end();
+  }
+}
+
+void loadSelectedMethod() {
+  if (preferences.begin("method", true)) {
+    uint8_t stored = preferences.getUChar("selected", (uint8_t)TitrationMethod::PhEndpoint);
+    preferences.end();
+    if (stored <= (uint8_t)TitrationMethod::Manual) {
+      currentMethod = (TitrationMethod)stored;
+    }
+  }
+  applyTitrationMethodPreset(settings, currentMethod);
+}
+
+void selectMethod(TitrationMethod method, bool persist) {
+  currentMethod = method;
+  applyTitrationMethodPreset(settings, currentMethod);
+  phFilter.reset();
+  phDynamics.reset();
+  phReady = false;
+  phSampleFresh = false;
+  resetRunData();
+  setState(RunState::SetupMode, String("Method ") + methodLabel(currentMethod));
+  if (persist) {
+    saveSelectedMethod();
+  }
+}
+
+bool methodMatchesPreset(TitrationMethod method) {
+  if (method == TitrationMethod::Manual) {
+    return true;
+  }
+  TitrationSettings preset;
+  applyTitrationMethodPreset(preset, method);
+  return preset.endpoint == settings.endpoint &&
+         preset.controlTrend == settings.controlTrend &&
+         preset.titrantPreset == settings.titrantPreset &&
+         absoluteFloat(preset.targetPh - settings.targetPh) <= 0.001f &&
+         absoluteFloat(preset.targetMillivolts - settings.targetMillivolts) <= 0.001f &&
+         absoluteFloat(preset.maxConsumedGrams - settings.maxConsumedGrams) <= 0.001f &&
+         absoluteFloat(preset.sampleGrams - settings.sampleGrams) <= 0.001f &&
+         absoluteFloat(preset.titrantMolarity - settings.titrantMolarity) <= 0.00001f;
 }
 
 String stateLabel() {
@@ -1328,26 +1412,35 @@ String htmlPage() {
   page += F("<section id='tab-manual' class='panel'><div class='card full'><h2>Manual Operation</h2><form id='manualForm' action='/action' method='get' class='row'><label class='mini'>Run seconds<input name='sec' type='number' min='0.1' max='30' step='0.1' value='1.0'></label><button class='btn' name='cmd' value='manual_titrant' type='submit'>Run titrant pump</button><button class='btn' name='cmd' value='manual_sample' type='submit'>Run sample pump</button><button class='btn danger' name='cmd' value='manual_stop' type='submit'>Stop pumps</button></form><p class='tiny'>Manual pump actions are blocked while titration or calibration is active. Use seconds here for priming tubing and experiment preparation.</p></div></section>");
 
   page += F("<section id='tab-admin' class='panel'><div class='split'><div><form action='/set' method='get' class='card'><h2>Settings</h2><div class='row'>");
-  page += F("<label>Signal trend<select name='trend'><option value='rise'");
+  page += F("<label>Method<select id='methodSelect' name='method'><option value='ph_ep'");
+  if (currentMethod == TitrationMethod::PhEndpoint) page += F(" selected");
+  page += F(">pH endpoint</option><option value='mv_ep'");
+  if (currentMethod == TitrationMethod::MvEndpoint) page += F(" selected");
+  page += F(">mV endpoint</option><option value='edta_hardness'");
+  if (currentMethod == TitrationMethod::EdtaHardness) page += F(" selected");
+  page += F(">EDTA hardness</option><option value='manual'");
+  if (currentMethod == TitrationMethod::Manual) page += F(" selected");
+  page += F(">Manual method</option></select></label>");
+  page += F("<label>Signal trend<select id='trendSelect' name='trend'><option value='rise'");
   if (settings.controlTrend == ControlTrend::Increase) page += F(" selected");
   page += F(">Dose raises signal</option><option value='fall'");
   if (settings.controlTrend == ControlTrend::Decrease) page += F(" selected");
   page += F(">Dose lowers signal</option></select></label>");
-  page += F("<label>Endpoint<select name='endpoint'><option value='ph'");
+  page += F("<label>Endpoint<select id='endpointSelect' name='endpoint'><option value='ph'");
   if (settings.endpoint == ControlEndpoint::Ph) page += F(" selected");
   page += F(">pH</option><option value='mv'");
   if (settings.endpoint == ControlEndpoint::Millivolts) page += F(" selected");
   page += F(">mV</option></select></label>");
-  page += F("<label>Target pH<input name='target' type='number' min='0' max='14' step='0.05' value='");
+  page += F("<label>Target pH<input id='targetPhInput' name='target' type='number' min='0' max='14' step='0.05' value='");
   page += String(settings.targetPh, 2);
-  page += F("'></label><label>Target mV<input name='target_mv' type='number' min='-1000' max='1000' step='1' value='");
+  page += F("'></label><label>Target mV<input id='targetMvInput' name='target_mv' type='number' min='-1000' max='1000' step='1' value='");
   page += String(settings.targetMillivolts, 0);
-  page += F("'></label><label>Max used g<input name='max' type='number' min='1' max='1000' step='1' value='");
+  page += F("'></label><label>Max used g<input id='maxInput' name='max' type='number' min='1' max='1000' step='1' value='");
   page += String(settings.maxConsumedGrams, 1);
-  page += F("'></label><label>Sample g<input name='sample' type='number' min='0' max='1000' step='0.1' value='");
+  page += F("'></label><label>Sample g<input id='sampleInput' name='sample' type='number' min='0' max='1000' step='0.1' value='");
   page += String(settings.sampleGrams, 1);
   page += F("'></label></div><div class='row' style='margin-top:10px'>");
-  page += F("<label>Titrant<select name='titrant'><option value='naoh001'");
+  page += F("<label>Titrant<select id='titrantSelect' name='titrant'><option value='naoh001'");
   if (settings.titrantPreset == TitrantPreset::Naoh001) page += F(" selected");
   page += F(">0.01 mol/L NaOH</option><option value='hcl001'");
   if (settings.titrantPreset == TitrantPreset::Hcl001) page += F(" selected");
@@ -1356,7 +1449,7 @@ String htmlPage() {
   page += F(">0.01 mol/L EDTA</option><option value='manual'");
   if (settings.titrantPreset == TitrantPreset::Manual) page += F(" selected");
   page += F(">Manual</option></select></label>");
-  page += F("<label>Manual mol/L<input name='titrant_m' type='number' min='0.0001' max='10' step='0.0001' value='");
+  page += F("<label>Manual mol/L<input id='titrantMInput' name='titrant_m' type='number' min='0.0001' max='10' step='0.0001' value='");
   page += String(settings.titrantMolarity, 4);
   page += F("'></label></div><p class='tiny'>Active titrant: <span id='titrant'>");
   page += htmlEscape(titrantLabel());
@@ -1396,6 +1489,8 @@ String htmlPage() {
   page += F("}catch(e){}}setInterval(poll,2000);");
   page += F("function activateTab(name){var p=document.getElementById('tab-'+name);if(!p)return;document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.tab===name)});document.querySelectorAll('.panel').forEach(function(x){x.classList.remove('active')});p.classList.add('active')}");
   page += F("document.querySelectorAll('.tab').forEach(function(b){b.onclick=function(){activateTab(b.dataset.tab);location.hash=b.dataset.tab}});var initial=(location.hash||'#run').slice(1);activateTab(initial);");
+  page += F("var presets={ph_ep:{endpoint:'ph',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'naoh001',titrant_m:'0.0100'},mv_ep:{endpoint:'mv',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'manual',titrant_m:'0.0100'},edta_hardness:{endpoint:'mv',trend:'fall',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'edta001',titrant_m:'0.0100'}};");
+  page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m)});");
   page += F("var mf=document.getElementById('manualForm');if(mf)mf.addEventListener('submit',async function(e){e.preventDefault();var fd=new FormData(mf);var cmd=e.submitter&&e.submitter.name?e.submitter.value:fd.get('cmd');fd.set('cmd',cmd);fd.set('ajax','1');try{await fetch('/action?'+new URLSearchParams(fd).toString(),{cache:'no-store'});poll()}catch(err){}});");
   page += F("</script></main></body></html>");
   return page;
@@ -1423,46 +1518,72 @@ void handleRoot() {
 void handleSet() {
   bool wifiChanged = false;
   bool endpointChanged = false;
+  bool methodRequested = false;
+  bool methodChanged = false;
+  bool methodFieldChanged = false;
+  TitrationMethod requestedMethod = currentMethod;
+  if (server.hasArg("method")) {
+    methodRequested = true;
+    requestedMethod = methodFromValue(server.arg("method"));
+  }
   if (server.hasArg("mode")) {
-    settings.mode = server.arg("mode") == "acid" ? TitrationMode::AddAcid : TitrationMode::AddBase;
-    settings.controlTrend = settings.mode == TitrationMode::AddAcid ? ControlTrend::Decrease : ControlTrend::Increase;
+    TitrationMode nextMode = server.arg("mode") == "acid" ? TitrationMode::AddAcid : TitrationMode::AddBase;
+    ControlTrend nextTrend = nextMode == TitrationMode::AddAcid ? ControlTrend::Decrease : ControlTrend::Increase;
+    methodFieldChanged = methodFieldChanged || nextMode != settings.mode || nextTrend != settings.controlTrend;
+    settings.mode = nextMode;
+    settings.controlTrend = nextTrend;
   }
   if (server.hasArg("trend")) {
-    settings.controlTrend = server.arg("trend") == "fall" ? ControlTrend::Decrease : ControlTrend::Increase;
-    settings.mode = settings.controlTrend == ControlTrend::Decrease ? TitrationMode::AddAcid : TitrationMode::AddBase;
+    ControlTrend nextTrend = server.arg("trend") == "fall" ? ControlTrend::Decrease : ControlTrend::Increase;
+    TitrationMode nextMode = nextTrend == ControlTrend::Decrease ? TitrationMode::AddAcid : TitrationMode::AddBase;
+    methodFieldChanged = methodFieldChanged || nextTrend != settings.controlTrend || nextMode != settings.mode;
+    settings.controlTrend = nextTrend;
+    settings.mode = nextMode;
   }
   if (server.hasArg("endpoint")) {
     ControlEndpoint nextEndpoint =
         server.arg("endpoint") == "mv" ? ControlEndpoint::Millivolts : ControlEndpoint::Ph;
     endpointChanged = nextEndpoint != settings.endpoint;
     settings.endpoint = nextEndpoint;
+    methodFieldChanged = methodFieldChanged || endpointChanged;
   }
   if (server.hasArg("target")) {
-    settings.targetPh = constrain(server.arg("target").toFloat(), 0.0f, 14.0f);
+    float nextTargetPh = constrain(server.arg("target").toFloat(), 0.0f, 14.0f);
+    methodFieldChanged = methodFieldChanged || absoluteFloat(nextTargetPh - settings.targetPh) > 0.001f;
+    settings.targetPh = nextTargetPh;
   }
   if (server.hasArg("target_mv")) {
-    settings.targetMillivolts = constrain(server.arg("target_mv").toFloat(), -1000.0f, 1000.0f);
+    float nextTargetMv = constrain(server.arg("target_mv").toFloat(), -1000.0f, 1000.0f);
+    methodFieldChanged = methodFieldChanged || absoluteFloat(nextTargetMv - settings.targetMillivolts) > 0.001f;
+    settings.targetMillivolts = nextTargetMv;
   }
   if (server.hasArg("max")) {
-    settings.maxConsumedGrams = constrain(server.arg("max").toFloat(), 1.0f, 1000.0f);
+    float nextMax = constrain(server.arg("max").toFloat(), 1.0f, 1000.0f);
+    methodFieldChanged = methodFieldChanged || absoluteFloat(nextMax - settings.maxConsumedGrams) > 0.001f;
+    settings.maxConsumedGrams = nextMax;
   }
   if (server.hasArg("sample")) {
-    settings.sampleGrams = constrain(server.arg("sample").toFloat(), 0.0f, 1000.0f);
+    float nextSample = constrain(server.arg("sample").toFloat(), 0.0f, 1000.0f);
+    methodFieldChanged = methodFieldChanged || absoluteFloat(nextSample - settings.sampleGrams) > 0.001f;
+    settings.sampleGrams = nextSample;
   }
   if (server.hasArg("titrant")) {
     String titrant = server.arg("titrant");
+    TitrantPreset nextTitrant = TitrantPreset::Naoh001;
     if (titrant == "hcl001") {
-      settings.titrantPreset = TitrantPreset::Hcl001;
+      nextTitrant = TitrantPreset::Hcl001;
     } else if (titrant == "edta001") {
-      settings.titrantPreset = TitrantPreset::Edta001;
+      nextTitrant = TitrantPreset::Edta001;
     } else if (titrant == "manual") {
-      settings.titrantPreset = TitrantPreset::Manual;
-    } else {
-      settings.titrantPreset = TitrantPreset::Naoh001;
+      nextTitrant = TitrantPreset::Manual;
     }
+    methodFieldChanged = methodFieldChanged || nextTitrant != settings.titrantPreset;
+    settings.titrantPreset = nextTitrant;
   }
   if (server.hasArg("titrant_m")) {
-    settings.titrantMolarity = constrain(server.arg("titrant_m").toFloat(), 0.0001f, 10.0f);
+    float nextMolarity = constrain(server.arg("titrant_m").toFloat(), 0.0001f, 10.0f);
+    methodFieldChanged = methodFieldChanged || absoluteFloat(nextMolarity - settings.titrantMolarity) > 0.00001f;
+    settings.titrantMolarity = nextMolarity;
   }
 
   bool calibrationChanged = false;
@@ -1532,10 +1653,25 @@ void handleSet() {
     }
   }
 
+  if (methodRequested && requestedMethod != currentMethod) {
+    methodChanged = true;
+    selectMethod(requestedMethod, true);
+    endpointChanged = false;
+  } else if (methodRequested && requestedMethod != TitrationMethod::Manual &&
+             !methodFieldChanged && !methodMatchesPreset(requestedMethod)) {
+    methodChanged = true;
+    selectMethod(requestedMethod, true);
+    endpointChanged = false;
+  } else if (methodFieldChanged && currentMethod != TitrationMethod::Manual) {
+    currentMethod = TitrationMethod::Manual;
+    saveSelectedMethod();
+  } else if (methodRequested) {
+    saveSelectedMethod();
+  }
   if (endpointChanged) {
     phDynamics.reset();
   }
-  statusLine = wifiChanged ? "WiFi saved" : (calibrationChanged ? "Calibration saved" : "Settings saved");
+  statusLine = wifiChanged ? "WiFi saved" : (calibrationChanged ? "Calibration saved" : (methodChanged ? "Method loaded" : "Settings saved"));
   displayDirty = true;
   redirectHomeTab(calibrationChanged ? "cal" : "admin");
   if (wifiChanged) {
@@ -1651,6 +1787,8 @@ void handleJson() {
   json += ",\"titrant\":\"" + jsonEscape(titrantLabel()) + "\"";
   json += ",\"titrant_m\":" + String(activeTitrantMolarity(), 5);
   json += ",\"result_m\":" + String(resultConcentrationM, 5);
+  json += ",\"method\":\"" + String(methodValue(currentMethod)) + "\"";
+  json += ",\"method_label\":\"" + jsonEscape(methodLabel(currentMethod)) + "\"";
   json += ",\"endpoint\":\"" + String(endpointText()) + "\"";
   json += ",\"target_mv\":" + String(settings.targetMillivolts, 0);
   json += ",\"target_ph\":" + String(settings.targetPh, 2);
@@ -1964,6 +2102,7 @@ void setup() {
   scaleReady = scaleSensor.begin();
 
   loadCalibration();
+  loadSelectedMethod();
 
   if (!phReady || !scaleReady) {
     stopReason = TitrationStopReason::InvalidReading;
