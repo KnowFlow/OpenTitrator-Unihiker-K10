@@ -134,7 +134,7 @@
 
 这些能力有价值，但不应抢在前面实现。
 
-- [ ] 学习滴定：根据一轮曲线推荐 controlBand、stableDelta、pulse 和 settle 参数。
+- [x] 学习滴定：根据一轮曲线推荐 controlBand、stableDelta 和 settle 参数。
 - [ ] 方法流程编辑器：组合取样、混合、滴定、清洗、计算、报告等步骤。
 - [ ] 空白值和辅助值管理。
 - [ ] 系列样品记录。

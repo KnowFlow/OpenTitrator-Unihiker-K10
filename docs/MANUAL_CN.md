@@ -271,6 +271,7 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - **Clear** 只清空浏览器中的曲线数据，不会改动 K10 设置。
 - **Auto EQP** 基于相邻加药点的 `d(signal)/d(used_g)` 计算最大斜率候选等当点，并用黄色线和圆点标记。
 - 点击曲线上的某个点可手动修正 EQP；再次点击 **Auto EQP** 会清除手动修正并恢复自动候选点。
+- **Suggest Params** 根据当前曲线估算 `Control band`、`Stable delta/s` 和 `Min / Max settle s` 的建议值；它只显示建议，不会自动修改设置。
 - **CSV** / **JSON** 将当前曲线数据下载到电脑，K10 不会把曲线写入 flash。
 - CSV / JSON 导出会包含当前 EQP 候选点、信号值和最大斜率。
 - 刷新网页会清空浏览器内存中的曲线数据；需要保留实验记录时请先导出。
@@ -301,7 +302,7 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - **WiFi**：STA 的 SSID 和密码。保存后自动重启。
 
 ### Guide 参数说明
-- **Guide** tab 汇总 Method、Endpoint、控制区、静置时间、结果公式、Run Data 和 EQP 的含义与调参方向，适合实验现场快速查阅。
+- **Guide** tab 汇总 Method、Endpoint、控制区、静置时间、结果公式、Run Data、EQP 和参数建议的含义与调参方向，适合实验现场快速查阅。
 
 > 页面每 2 秒自动刷新，不会打断表单输入。
 

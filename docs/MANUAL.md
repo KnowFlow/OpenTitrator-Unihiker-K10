@@ -271,6 +271,7 @@ Open the controller IP in a browser.
 - **Clear** only clears the browser-side curve data. It does not change K10 settings.
 - **Auto EQP** computes the maximum `d(signal)/d(used_g)` slope between dose-change points and marks the candidate equivalence point with a yellow line and dot.
 - Click a plotted point to manually correct the EQP candidate; click **Auto EQP** again to clear the manual correction.
+- **Suggest Params** estimates `Control band`, `Stable delta/s`, and `Min / Max settle s` from the current curve. It only displays suggestions and does not change settings automatically.
 - **CSV** / **JSON** downloads the current curve data to the computer. K10 does not write curve data to flash.
 - CSV / JSON exports include the current EQP candidate, signal value, and maximum slope.
 - Refreshing the page clears the browser-memory curve, so export before refreshing if you need the record.
@@ -301,7 +302,7 @@ Open the controller IP in a browser.
 - **WiFi**: STA SSID and password. Saved to flash; controller restarts automatically.
 
 ### Guide Parameter Notes
-- The **Guide** tab summarizes Method, Endpoint, control band, settle timing, result formulas, Run Data, and EQP tuning notes for quick reference during experiments.
+- The **Guide** tab summarizes Method, Endpoint, control band, settle timing, result formulas, Run Data, EQP, and parameter suggestions for quick reference during experiments.
 
 > The page updates live every 2 seconds without refreshing, so form inputs are not interrupted.
 
