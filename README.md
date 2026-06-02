@@ -64,6 +64,9 @@ A `TitrationDynamics` tracker watches `dpH/dt` and halts immediately if the curv
 ### Automatic Pump Calibration
 From **SetupReady**, press **B** to enter calibration. The controller runs each pump for exactly 2 seconds, waits 5 seconds after each pump stops, measures the weight change on the scale, computes the flow rate (g/s), and saves it to ESP32 Preferences.
 
+### Calibration Page
+The web **Calibration** tab separates pump flow, scale, pH/mV sensor, and titrant standard settings. The pH/mV section displays two-point slope percentage, pH 7 offset, and calibration status. **Reset pH/mV filter** only restarts acquisition filtering; it does not overwrite the saved two-point calibration. Titrant molarity, blank, and result formula remain in the **Admin** tab.
+
 ### Network & Remote Control
 - **AP mode** is always on (`K10-pH-Titrator` / `12345678`).
 - Optional **STA WiFi** configurable from the web UI and persisted in flash.

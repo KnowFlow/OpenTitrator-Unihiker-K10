@@ -283,6 +283,14 @@ Open the controller IP in a browser.
 - **Reset** — returns to SetupMode.
 - **Emergency stop** — halts everything immediately.
 
+### Calibration Tab
+- **Enter ready**: stops both pumps and enters the READY state for calibration.
+- **Calibrate pumps**: measures both pump flow rates in the sequence "titrant pump 2 s -> wait 5 s -> sample pump 2 s -> wait 5 s".
+- **Tare scale**: uses the current reactor weight as the scale baseline.
+- **Reset pH/mV filter**: restarts pH/mV acquisition filtering after changing probe or buffer solution. It does not overwrite the saved two-point calibration.
+- **pH/mV Sensor**: enter two buffer pH values with their probe mV and ADS input mV. The page displays slope percentage, pH 7 offset, and calibration status to help decide whether the probe needs recalibration.
+- **Titrant Standard**: shows the current titrant and result formula. Titrant molarity, blank, and formula are configured in the **Admin** tab; a future standardization step can calculate titrant factor from a primary standard.
+
 ### Settings
 - **Method**: pH endpoint, mV endpoint, EDTA hardness, or Manual method. Changing a preset immediately fills the related form values.
 - **Endpoint**: pH or mV control signal.
@@ -302,7 +310,7 @@ Open the controller IP in a browser.
 - **WiFi**: STA SSID and password. Saved to flash; controller restarts automatically.
 
 ### Guide Parameter Notes
-- The **Guide** tab summarizes Method, Endpoint, control band, settle timing, result formulas, Run Data, EQP, and parameter suggestions for quick reference during experiments.
+- The **Guide** tab summarizes Method, Endpoint, Calibration, control band, settle timing, result formulas, Run Data, EQP, and parameter suggestions for quick reference during experiments.
 
 > The page updates live every 2 seconds without refreshing, so form inputs are not interrupted.
 
@@ -381,6 +389,8 @@ The controller uses the settle interval returned by each dose decision before re
 
 ```
 flow_rate_gps = (weight_after - weight_before) / 2.0
+pH_slope_% = abs((probe_mV_2 - probe_mV_1) / (pH_2 - pH_1)) / 59.16 x 100
+pH7_offset_mV = probe_mV_1 + (7.0 - pH_1) x slope_mV_per_pH
 ```
 
 Saved to Preferences namespace `cal`, keys `titrant_gps` and `sample_gps`.

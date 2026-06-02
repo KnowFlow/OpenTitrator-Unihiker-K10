@@ -283,6 +283,14 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - **Reset** — 返回设置模式。
 - **Emergency stop** — 立即停止一切。
 
+### Calibration tab
+- **Enter ready**：停止两路泵并进入可校准的 READY 状态。
+- **Calibrate pumps**：按“滴定泵 2 秒 → 静置 5 秒 → 样品泵 2 秒 → 静置 5 秒”的顺序测量两路泵流量。
+- **Tare scale**：将当前反应器重量作为电子秤基准。
+- **Reset pH/mV filter**：重启 pH/mV 采样滤波，用于更换探头或缓冲液后重新稳定读数；它不会改写保存的两点校准。
+- **pH/mV Sensor**：填写两种缓冲液的 pH、探头 mV 和 ADS 输入 mV。页面会显示斜率百分比、pH 7 偏移和校准状态，便于判断探头是否需要重新校准。
+- **Titrant Standard**：显示当前滴定液和结果公式。滴定液摩尔浓度、空白量和公式在 **Admin** tab 设置；后续可扩展为用基准物质反标定滴定液系数。
+
 ### 设置项
 - **Method**：pH endpoint、mV endpoint、EDTA hardness 或 Manual method。切换预设时页面会立即填入对应参数。
 - **Endpoint**：选择 pH 或 mV 作为控制信号。
@@ -302,7 +310,7 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - **WiFi**：STA 的 SSID 和密码。保存后自动重启。
 
 ### Guide 参数说明
-- **Guide** tab 汇总 Method、Endpoint、控制区、静置时间、结果公式、Run Data、EQP 和参数建议的含义与调参方向，适合实验现场快速查阅。
+- **Guide** tab 汇总 Method、Endpoint、Calibration、控制区、静置时间、结果公式、Run Data、EQP 和参数建议的含义与调参方向，适合实验现场快速查阅。
 
 > 页面每 2 秒自动刷新，不会打断表单输入。
 
@@ -381,6 +389,8 @@ python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.
 
 ```
 流量_gps = (加药后重量 - 加药前重量) / 2.0
+pH斜率_% = |(探头mV2 - 探头mV1) / (pH2 - pH1)| / 59.16 × 100
+pH7偏移_mV = 探头mV1 + (7.0 - pH1) × 斜率_mV每pH
 ```
 
 保存到 Preferences 命名空间 `cal`，键名为 `titrant_gps` 和 `sample_gps`。

@@ -654,6 +654,37 @@ String resultUnit() {
   return "mol/L";
 }
 
+float phCalibrationSlopeMvPerPh() {
+  float phSpan = phCalibration.highPh - phCalibration.lowPh;
+  if (absoluteFloat(phSpan) < 0.001f) {
+    return 0.0f;
+  }
+  return (phCalibration.highProbeMillivolts - phCalibration.lowProbeMillivolts) / phSpan;
+}
+
+float phCalibrationSlopePercent() {
+  const float theoreticalSlopeMvPerPh = 59.16f;
+  return absoluteFloat(phCalibrationSlopeMvPerPh()) / theoreticalSlopeMvPerPh * 100.0f;
+}
+
+float phCalibrationOffsetAtPh7Mv() {
+  return phCalibration.lowProbeMillivolts + (7.0f - phCalibration.lowPh) * phCalibrationSlopeMvPerPh();
+}
+
+String phCalibrationStatus() {
+  float phSpan = absoluteFloat(phCalibration.highPh - phCalibration.lowPh);
+  float probeSpan = absoluteFloat(phCalibration.highProbeMillivolts - phCalibration.lowProbeMillivolts);
+  float adsSpan = absoluteFloat(phCalibration.highAdsMillivolts - phCalibration.lowAdsMillivolts);
+  float slopePct = phCalibrationSlopePercent();
+  if (phSpan < 1.0f || probeSpan < 20.0f || adsSpan < 20.0f || slopePct < 70.0f || slopePct > 120.0f) {
+    return "Check sensor calibration";
+  }
+  if (slopePct < 85.0f || slopePct > 105.0f) {
+    return "Usable, recalibrate soon";
+  }
+  return "OK";
+}
+
 uint8_t resultDecimals() {
   switch (settings.resultFormula) {
     case ResultFormula::AcidBaseMolar: return 5;
@@ -1368,7 +1399,7 @@ String htmlPage() {
   page += F("main{max-width:880px;margin:auto;padding:16px}.top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}.brand{letter-spacing:.08em;color:var(--muted);font-size:12px}.title{font-size:28px;font-weight:700;margin:2px 0 0}.pill{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;max-width:100%;color:var(--blue)}.pill span{border:1px solid var(--line);border-radius:999px;padding:7px 10px;background:#071820;white-space:nowrap}");
   page += F(".hero{border:1px solid var(--line);border-radius:10px;background:linear-gradient(135deg,#0f2630,#081219);padding:18px;margin-bottom:12px;display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.ph{font-size:72px;line-height:.95;font-weight:800}.unit{font-size:18px;color:var(--muted);margin-left:6px}.sub{color:var(--muted);margin-top:10px}.status{display:grid;gap:8px;align-content:center}.status b{font-size:22px}");
   page += F(".grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.card{border:1px solid var(--line);border-radius:8px;padding:13px;background:rgba(13,29,36,.9)}.k{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.07em}.v{font-size:28px;font-weight:700;margin-top:5px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}");
-  page += F(".bar{height:10px;background:#071014;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-top:10px}.fill{height:100%;background:linear-gradient(90deg,var(--ok),var(--warn))}.split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}label{display:grid;gap:5px;color:var(--muted);font-size:12px;min-width:130px;flex:1}");
+  page += F(".bar{height:10px;background:#071014;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-top:10px}.fill{height:100%;background:linear-gradient(90deg,var(--ok),var(--warn))}.split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.split>.full{grid-column:1/-1}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}label{display:grid;gap:5px;color:var(--muted);font-size:12px;min-width:130px;flex:1}");
   page += F("button,.btn,input,select{font:inherit;border-radius:7px;border:1px solid #3a6472;background:#0a1a21;color:var(--text);padding:10px 12px;text-decoration:none}button,.btn{display:inline-block;cursor:pointer;font-weight:700}.primary{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.danger{background:#351216;border-color:#8c3640;color:#ffd1d1}.ghost{color:var(--blue)}h2{margin:0 0 10px;font-size:16px}.tiny{font-size:12px;color:var(--muted)}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tab{background:#071820;color:var(--blue)}.tab.active{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.panel{display:none}.panel.active{display:block}.full{margin-top:10px}.mini{max-width:170px}.chart{width:100%;height:260px;border:1px solid var(--line);border-radius:8px;background:#071014;cursor:crosshair}.chartbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:10px}.chartbar label{min-width:110px;max-width:180px}.eqp{color:var(--warn);font-weight:700}.guide{display:grid;grid-template-columns:1fr 1fr;gap:10px}.guide p{margin:7px 0}.term{color:var(--blue);font-weight:700}@media(max-width:720px){.hero,.split,.guide{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.ph{font-size:58px}.top{display:block}.pill{justify-content:flex-start;margin-top:8px}.pill span{border-radius:7px}}</style></head><body><main>");
   page += F("<style>.ph,.v,#status,#mv{font-variant-numeric:tabular-nums}.ph{min-height:72px}.sub{min-height:22px}</style>");
 
@@ -1469,34 +1500,55 @@ String htmlPage() {
   page += F("<button id='curveClear' type='button'>Clear</button><button id='eqpAuto' type='button'>Auto EQP</button><button id='learnParams' type='button'>Suggest Params</button><button id='curveCsv' type='button'>CSV</button><button id='curveJson' type='button'>JSON</button>");
   page += F("</div><canvas id='curveCanvas' class='chart' width='820' height='260'></canvas><p id='curveInfo' class='tiny'>0 points</p><p id='eqpInfo' class='tiny'>EQP waits for dose changes. Click the curve to correct the candidate point.</p><p id='learnInfo' class='tiny'>Suggestions wait for at least 4 dose-change points.</p></div></section>");
 
-  page += F("<section id='tab-cal' class='panel'><div class='card full'><h2>Calibration Actions</h2><div class='row'>");
+  page += F("<section id='tab-cal' class='panel'><div class='card full'><h2>Calibration Start</h2><div class='row'>");
   page += F("<a class='btn' href='/action?cmd=ready'>Enter ready</a>");
   page += F("<a class='btn primary' href='/action?cmd=calibrate'>Calibrate pumps</a>");
-  page += F("<a class='btn' href='/action?cmd=scale_calibrate'>Scale calibrate</a>");
-  page += F("<a class='btn' href='/action?cmd=ph_signal_calibrate'>pH/mV calibrate</a>");
+  page += F("<a class='btn' href='/action?cmd=scale_calibrate'>Tare scale</a>");
+  page += F("<a class='btn' href='/action?cmd=ph_signal_calibrate'>Reset pH/mV filter</a>");
   page += F("</div><p class='tiny'>Enter ready stops both pumps and puts the controller in READY. Pump calibration can then be started here or with the K10 B key. Each pump runs 2 s, then waits 5 s before reading the scale.</p></div>");
-  page += F("<form action='/set' method='get' class='card full'><h2>Calibration Values</h2><div class='row'>");
-  page += F("<label>pH point A<input name='low_ph' type='number' min='0' max='14' step='0.01' value='");
-  page += String(phCalibration.lowPh, 2);
-  page += F("'></label><label>Point A probe mV<input name='low_probe_mv' type='number' min='-1000' max='1000' step='0.1' value='");
-  page += String(phCalibration.lowProbeMillivolts, 1);
-  page += F("'></label><label>Point A ADS mV<input name='low_ads_mv' type='number' min='-4096' max='4096' step='0.1' value='");
-  page += String(phCalibration.lowAdsMillivolts, 1);
-  page += F("'></label></div><div class='row' style='margin-top:10px'>");
-  page += F("<label>pH point B<input name='high_ph' type='number' min='0' max='14' step='0.01' value='");
-  page += String(phCalibration.highPh, 2);
-  page += F("'></label><label>Point B probe mV<input name='high_probe_mv' type='number' min='-1000' max='1000' step='0.1' value='");
-  page += String(phCalibration.highProbeMillivolts, 1);
-  page += F("'></label><label>Point B ADS mV<input name='high_ads_mv' type='number' min='-4096' max='4096' step='0.1' value='");
-  page += String(phCalibration.highAdsMillivolts, 1);
-  page += F("'></label></div><div class='row' style='margin-top:10px'>");
+  page += F("<form action='/set' method='get' class='split'>");
+  page += F("<div class='card'><h2>Pump Flow</h2><div class='row'>");
   page += F("<label>Titrant pump g/s<input name='titrant_gps' type='number' min='0' max='100' step='0.001' value='");
   page += String(titrantPumpFlowRateGps, 3);
   page += F("'></label><label>Sample pump g/s<input name='sample_gps' type='number' min='0' max='100' step='0.001' value='");
   page += String(samplePumpFlowRateGps, 3);
-  page += F("'></label><label>Scale factor<input name='scale_factor' type='number' min='1' max='100000' step='0.1' value='");
+  page += F("'></label></div><p class='tiny'>Measures each pump independently by mass. Re-run after tubing, pump head, liquid, or viscosity changes.</p></div>");
+  page += F("<div class='card'><h2>Scale</h2><div class='row'><label>Scale factor<input name='scale_factor' type='number' min='1' max='100000' step='0.1' value='");
   page += String(scaleSensor.calibrationFactor(), 1);
-  page += F("'></label></div><p class='tiny'>Use pump calibration to measure flow, Scale calibrate to tare the reactor scale, and pH/mV calibrate to restart filtered pH acquisition before saving refined points here.</p><button class='primary' type='submit'>Save calibration</button></form></section>");
+  page += F("'></label></div><p class='tiny'>Tare scale resets the reactor baseline. Scale factor is the HX711 conversion value used for grams.</p></div>");
+  page += F("<div class='card full'><h2>pH/mV Sensor</h2><p class='tiny'>Live ");
+  page += String(lastPh.millivolts, 0);
+  page += F(" mV / ");
+  page += String(lastPh.ph, 2);
+  page += F(" pH. Status: ");
+  page += htmlEscape(phCalibrationStatus());
+  page += F(" / slope ");
+  page += String(phCalibrationSlopePercent(), 1);
+  page += F("% / pH7 offset ");
+  page += String(phCalibrationOffsetAtPh7Mv(), 1);
+  page += F(" mV.</p><div class='row'>");
+  page += F("<label>Buffer 1 pH<input name='low_ph' type='number' min='0' max='14' step='0.01' value='");
+  page += String(phCalibration.lowPh, 2);
+  page += F("'></label><label>Buffer 1 probe mV<input name='low_probe_mv' type='number' min='-1000' max='1000' step='0.1' value='");
+  page += String(phCalibration.lowProbeMillivolts, 1);
+  page += F("'></label><label>Buffer 1 ADS mV<input name='low_ads_mv' type='number' min='-4096' max='4096' step='0.1' value='");
+  page += String(phCalibration.lowAdsMillivolts, 1);
+  page += F("'></label></div><div class='row' style='margin-top:10px'>");
+  page += F("<label>Buffer 2 pH<input name='high_ph' type='number' min='0' max='14' step='0.01' value='");
+  page += String(phCalibration.highPh, 2);
+  page += F("'></label><label>Buffer 2 probe mV<input name='high_probe_mv' type='number' min='-1000' max='1000' step='0.1' value='");
+  page += String(phCalibration.highProbeMillivolts, 1);
+  page += F("'></label><label>Buffer 2 ADS mV<input name='high_ads_mv' type='number' min='-4096' max='4096' step='0.1' value='");
+  page += String(phCalibration.highAdsMillivolts, 1);
+  page += F("'></label></div><p class='tiny'>Save two buffer points after entering the actual buffer pH and measured probe/ADS mV values. Reset pH/mV filter only restarts acquisition; it does not overwrite saved calibration.</p></div>");
+  page += F("<div class='card'><h2>Titrant Standard</h2><p class='tiny'>Current titrant: ");
+  page += htmlEscape(titrantLabel());
+  page += F("</p><p class='tiny'>Result formula: ");
+  page += htmlEscape(resultFormulaLabel());
+  page += F(" / blank ");
+  page += String(settings.blankGrams, 2);
+  page += F(" g.</p><p class='tiny'>Use Admin for known titrant molarity, blank, and formula. A future standardization step can calculate titrant factor from a primary standard.</p></div>");
+  page += F("<div class='card'><h2>Save</h2><p class='tiny'>Saving stores pump flow, scale factor, and pH/mV two-point calibration in flash. WiFi and method settings are kept separate.</p><button class='primary' type='submit'>Save calibration</button></div></form></section>");
 
   page += F("<section id='tab-manual' class='panel'><div class='card full'><h2>Manual Operation</h2><form id='manualForm' action='/action' method='get' class='row'><label class='mini'>Run seconds<input name='sec' type='number' min='0.1' max='30' step='0.1' value='1.0'></label><button class='btn' name='cmd' value='manual_titrant' type='submit'>Run titrant pump</button><button class='btn' name='cmd' value='manual_sample' type='submit'>Run sample pump</button><button class='btn danger' name='cmd' value='manual_stop' type='submit'>Stop pumps</button></form><p class='tiny'>Manual pump actions are blocked while titration or calibration is active. Use seconds here for priming tubing and experiment preparation.</p></div></section>");
 
@@ -1585,6 +1637,7 @@ String htmlPage() {
   page += F("<section id='tab-guide' class='panel'><div class='guide'>");
   page += F("<div class='card'><h2>Method and Endpoint</h2><p><span class='term'>Method</span> loads a preset group of endpoint, titrant, result formula, and control defaults. Manual keeps custom values.</p><p><span class='term'>Endpoint</span> selects the control signal. Use pH for acid/base endpoint work, or mV for potentiometric endpoints.</p><p><span class='term'>Signal trend</span> tells the controller whether dosing should raise or lower the endpoint signal.</p><p><span class='term'>Target pH / mV</span> is the EP stop value. Only the active endpoint is used for control.</p></div>");
   page += F("<div class='card'><h2>Endpoint Control</h2><p><span class='term'>Control band</span> is the near-target zone. Larger values slow dosing earlier; smaller values dose faster but risk overshoot.</p><p><span class='term'>Stable delta/s</span> is the allowed signal drift while settling. Lower values wait for a flatter response.</p><p><span class='term'>Hold s</span> confirms the endpoint after it is reached. If the signal moves back out, dosing resumes.</p><p><span class='term'>Min / Max settle s</span> controls wait time after each pulse. Slow probes or slow reactions need longer settling.</p><p><span class='term'>Max time s</span> stops a run that takes too long.</p></div>");
+  page += F("<div class='card'><h2>Calibration</h2><p><span class='term'>Enter ready</span> stops both pumps before any calibration action.</p><p><span class='term'>Pump flow</span> measures titrant and sample pump delivery in g/s. Recalibrate after tubing, pump head, or liquid changes.</p><p><span class='term'>Scale</span> uses tare for the reactor baseline; scale factor is the grams conversion value.</p><p><span class='term'>pH/mV sensor</span> stores two buffer points and reports slope %, pH7 offset, and status. Reset pH/mV filter only restarts acquisition.</p><p><span class='term'>Titrant standard</span> is configured in Admin through molarity, blank, and result formula.</p></div>");
   page += F("<div class='card'><h2>Dosing and Results</h2><p><span class='term'>Titrant</span> selects the known solution. Manual mol/L is used only when titrant is Manual.</p><p><span class='term'>Max used g</span> is the safety limit for titrant consumption.</p><p><span class='term'>Sample g</span> is the sample mass delivered by the P1 pump before titration.</p><p><span class='term'>Result formula</span> controls only calculation and display; it does not change pump control.</p><p><span class='term'>Blank g</span> subtracts blank titration consumption before calculating.</p><p><span class='term'>Manual factor</span> uses result = net titrant g x factor / sample g for custom tests.</p></div>");
   page += F("<div class='card'><h2>Run Data and EQP</h2><p><span class='term'>Time s</span> is the safer default X axis because data keeps moving even while used g is unchanged.</p><p><span class='term'>Used g</span> is useful for final analysis after enough dose changes have happened.</p><p><span class='term'>Auto EQP</span> marks the largest d(signal)/d(used g) candidate. It is an analysis point, not an automatic stop command.</p><p><span class='term'>Suggest Params</span> estimates control band, stable delta, and settle time from the current curve. It does not apply settings automatically.</p><p>Click the curve to manually correct the EQP point, then export CSV or JSON to save the run on the computer.</p></div>");
   page += F("</div></section>");
@@ -2016,6 +2069,9 @@ void handleJson() {
   json += ",\"high_ph\":" + String(phCalibration.highPh, 2);
   json += ",\"high_probe_mv\":" + String(phCalibration.highProbeMillivolts, 1);
   json += ",\"high_ads_mv\":" + String(phCalibration.highAdsMillivolts, 1);
+  json += ",\"ph_slope_percent\":" + String(phCalibrationSlopePercent(), 1);
+  json += ",\"ph_offset7_mv\":" + String(phCalibrationOffsetAtPh7Mv(), 1);
+  json += ",\"ph_cal_status\":\"" + jsonEscape(phCalibrationStatus()) + "\"";
   json += "}";
   server.send(200, "application/json", json);
 }
