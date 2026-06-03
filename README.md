@@ -93,7 +93,7 @@ The project is evolving from a pH titrator into a general potentiometric titrato
 - [x] Lightweight EQP analysis: compute slope from curve data and mark the equivalence point.
 - [x] Result calculation for acid/base concentration, EDTA hardness, and manual factors.
 - [x] Method-level blank and auxiliary values: store blank, manual molarity, density, and manual factor per Method.
-- [ ] EDTA hardness method refinement: use mV curve slope to stop at an automatic equivalence point instead of a fixed mV target.
+- [x] EDTA hardness method refinement: use mV curve slope to stop at an automatic equivalence point instead of a fixed mV target.
 - [ ] Calcium/magnesium two-step hardness workflow with pH-condition guidance.
 - [ ] Advanced features: method workflow, sample series, and reports.
 

@@ -271,6 +271,7 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - x 轴可选择 `Used g` 或 `Time s`。
 - **Clear** 只清空浏览器中的曲线数据，不会改动 K10 设置。
 - **Auto EQP** 基于相邻加药点的 `d(signal)/d(used_g)` 计算最大斜率候选等当点，并用黄色线和圆点标记。
+- 在 **EDTA hardness** 方法中，固件端也会运行 EQP 追踪器：记录稳定后的 mV-用量点，当 mV 斜率峰值后连续两段回落时自动停止。
 - 点击曲线上的某个点可手动修正 EQP；再次点击 **Auto EQP** 会清除手动修正并恢复自动候选点。
 - **Suggest Params** 根据当前曲线估算 `Control band`、`Stable delta/s` 和 `Min / Max settle s` 的建议值；它只显示建议，不会自动修改设置。
 - **CSV** / **JSON** 将当前曲线数据下载到电脑，K10 不会把曲线写入 flash。
@@ -308,6 +309,7 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - **Result formula**：酸碱浓度、EDTA 总硬度（mg/L as CaCO3）或手动系数。
 - **Blank g**：空白滴定消耗量，计算结果时从滴定剂用量中扣除。
 - **Titrant density g/mL / Sample density g/mL**：把称重得到的质量换算为 mL，用于摩尔浓度和 EDTA 硬度计算。水样或近似水溶液可保持 `1.000`。
+- **EDTA hardness 自动 EQP**：该方法不再把固定 target mV 作为常规停止条件，而是用 mV 斜率峰值判断等当点；max used 和 max time 仍然作为安全保护。
 - **Manual factor**：手动公式使用的换算系数。
 - **辅助值保存**：`Manual mol/L`、`Blank g`、密度和 `Manual factor` 按当前 Method 单独保存；修改这些值不会把方法切换成 Manual。
 - **WiFi**：STA 的 SSID 和密码。保存后自动重启。

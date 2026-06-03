@@ -259,6 +259,23 @@ int main() {
   settings.manualResultFactor = 1.0f;
 
   {
+    EqpTracker eqp;
+    expectTrue(!eqp.add(0.0f, 300.0f), "EQP tracker stores initial point");
+    expectTrue(!eqp.add(0.1f, 295.0f), "EQP tracker waits before peak confirmation");
+    expectTrue(!eqp.add(0.2f, 280.0f), "EQP tracker records steepest slope");
+    expectTrue(!eqp.add(0.3f, 276.0f), "EQP tracker needs two post-peak drops");
+    expectTrue(eqp.add(0.4f, 274.0f), "EQP tracker confirms slope peak after two drops");
+    expectNear(eqp.bestUsedGrams, 0.2f, 0.001f, "EQP tracker keeps peak used grams");
+    expectNear(eqp.bestSignal, 280.0f, 0.001f, "EQP tracker keeps peak signal");
+
+    settings.endpoint = ControlEndpoint::Millivolts;
+    settings.maxConsumedGrams = 20.0f;
+    TitrationDecision eqpDecision = decideEqpDose(settings, 274.0f, 0.4f, eqp);
+    expectTrue(eqpDecision.action == TitrationAction::Done, "EQP dose decision stops at confirmed equivalence point");
+    expectTrue(eqpDecision.reason == TitrationStopReason::EquivalencePoint, "EQP dose decision reports equivalence point");
+  }
+
+  {
     TitrationSettings methodSettings;
     applyTitrationMethodPreset(methodSettings, TitrationMethod::PhEndpoint);
     expectTrue(methodSettings.endpoint == ControlEndpoint::Ph, "pH method uses pH endpoint");

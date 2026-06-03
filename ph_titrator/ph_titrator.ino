@@ -541,12 +541,14 @@ PhReading lastPh;
 ScaleReading lastScale;
 PhFilter phFilter;
 TitrationDynamics phDynamics;
+EqpTracker eqpTracker;
 float titrantPumpFlowRateGps = 0.0f;
 float samplePumpFlowRateGps = 0.0f;
 float initialBottleWeight = 0.0f;
 float sampleStartWeight = 0.0f;
 float sampleDeliveredGrams = 0.0f;
 float consumedGrams = 0.0f;
+float endpointUsedGrams = 0.0f;
 float resultValue = 0.0f;
 uint32_t stateStartedMs = 0;
 uint32_t runStartedMs = 0;
@@ -613,12 +615,42 @@ const char *endpointText() {
   return settings.endpoint == ControlEndpoint::Millivolts ? "mV" : "pH";
 }
 
+float activeTitrantMolarity();
+
 float activeControlValue() {
   return settings.endpoint == ControlEndpoint::Millivolts ? lastPh.millivolts : lastPh.ph;
 }
 
 float activeControlTarget() {
   return controlTarget(settings);
+}
+
+bool autoEqpEnabled() {
+  return currentMethod == TitrationMethod::EdtaHardness &&
+         settings.endpoint == ControlEndpoint::Millivolts &&
+         settings.resultFormula == ResultFormula::EdtaHardnessCaCO3;
+}
+
+float resultConsumedGrams() {
+  if (endpointUsedGrams > 0.0f) {
+    return endpointUsedGrams;
+  }
+  return consumedGrams;
+}
+
+float computeCurrentResult() {
+  return computeTitrationResult(settings, activeTitrantMolarity(), resultConsumedGrams(), settings.sampleGrams);
+}
+
+bool recordEqpPointIfEnabled() {
+  if (!autoEqpEnabled() || !phReady || !scaleReady) {
+    return false;
+  }
+  bool reached = eqpTracker.add(consumedGrams, activeControlValue());
+  if (eqpTracker.bestUsedGrams > 0.0f) {
+    endpointUsedGrams = eqpTracker.bestUsedGrams;
+  }
+  return reached;
 }
 
 String titrantLabel() {
@@ -844,6 +876,7 @@ void selectMethod(TitrationMethod method, bool persist) {
   loadMethodAuxIntoSettings(currentMethod);
   phFilter.reset();
   phDynamics.reset();
+  eqpTracker.reset();
   phReady = false;
   phSampleFresh = false;
   resetRunData();
@@ -951,6 +984,7 @@ String reasonLabel(TitrationStopReason reason) {
   switch (reason) {
     case TitrationStopReason::None: return "";
     case TitrationStopReason::TargetReached: return "Target reached";
+    case TitrationStopReason::EquivalencePoint: return "EQP reached";
     case TitrationStopReason::MassLimit: return "Mass limit";
     case TitrationStopReason::TimeLimit: return "Time limit";
     case TitrationStopReason::InvalidReading: return "Bad pH";
@@ -982,6 +1016,7 @@ void resetRunData() {
   samplePump.stop();
   phFilter.reset();
   phDynamics.reset();
+  eqpTracker.reset();
   scaleFilter.reset(scaleReady ? lastScale.grams : 0.0f);
   sensorFaultCount = 0;
   sensorFault = false;
@@ -989,6 +1024,7 @@ void resetRunData() {
   sampleDeliveredGrams = 0.0f;
   initialBottleWeight = scaleReady ? lastScale.grams : 0.0f;
   consumedGrams = 0.0f;
+  endpointUsedGrams = 0.0f;
   resultValue = 0.0f;
   phReady = false;
   phSampleFresh = false;
@@ -1009,6 +1045,7 @@ bool startTitration() {
   samplePump.stop();
   phFilter.reset();
   phDynamics.reset();
+  eqpTracker.reset();
   scaleFilter.reset(lastScale.grams);
   sensorFaultCount = 0;
   sensorFault = false;
@@ -1016,6 +1053,7 @@ bool startTitration() {
   sampleDeliveredGrams = 0.0f;
   initialBottleWeight = lastScale.grams;
   consumedGrams = 0.0f;
+  endpointUsedGrams = 0.0f;
   resultValue = 0.0f;
   runStartedMs = 0;
   endpointHoldStartedMs = 0;
@@ -1365,6 +1403,8 @@ void runController() {
       initialBottleWeight = lastScale.grams;
       scaleFilter.reset(lastScale.grams);
       consumedGrams = 0.0f;
+      endpointUsedGrams = 0.0f;
+      eqpTracker.reset();
       setState(RunState::FilterWarmup, "Stabilizing pH");
     } else {
       samplePump.runContinuous();
@@ -1381,6 +1421,7 @@ void runController() {
       return;
     }
     if (phReady) {
+      recordEqpPointIfEnabled();
       setState(RunState::Running, "Checking");
     }
     return;
@@ -1406,6 +1447,13 @@ void runController() {
     if (elapsed < maxSettleMs && (!phSampleFresh || !phDynamics.isSettledWithin(settings.stableDelta))) {
       statusLine = String("Settling ") + endpointText();
       displayDirty = true;
+      return;
+    }
+    if (recordEqpPointIfEnabled()) {
+      pump.stop();
+      stopReason = TitrationStopReason::EquivalencePoint;
+      resultValue = computeCurrentResult();
+      setState(RunState::Done, reasonLabel(stopReason));
       return;
     }
     setState(RunState::Running, "Checking");
@@ -1440,7 +1488,15 @@ void runController() {
     return;
   }
 
-  if (isEndpointReached(settings, activeControlValue())) {
+  if (autoEqpEnabled() && recordEqpPointIfEnabled()) {
+    pump.stop();
+    stopReason = TitrationStopReason::EquivalencePoint;
+    resultValue = computeCurrentResult();
+    setState(RunState::Done, reasonLabel(stopReason));
+    return;
+  }
+
+  if (!autoEqpEnabled() && isEndpointReached(settings, activeControlValue())) {
     if (endpointHoldStartedMs == 0) {
       endpointHoldStartedMs = millis();
     }
@@ -1448,7 +1504,7 @@ void runController() {
     if (holdMs == 0 || millis() - endpointHoldStartedMs >= holdMs) {
       pump.stop();
       stopReason = TitrationStopReason::TargetReached;
-      resultValue = computeTitrationResult(settings, activeTitrantMolarity(), consumedGrams, settings.sampleGrams);
+      resultValue = computeCurrentResult();
       setState(RunState::Done, reasonLabel(stopReason));
     } else {
       pump.stop();
@@ -1459,8 +1515,9 @@ void runController() {
   }
   endpointHoldStartedMs = 0;
 
-  TitrationDecision decision = decideAdaptiveDose(
-      settings, activeControlValue(), consumedGrams, phDynamics);
+  TitrationDecision decision = autoEqpEnabled()
+      ? decideEqpDose(settings, activeControlValue(), consumedGrams, eqpTracker)
+      : decideAdaptiveDose(settings, activeControlValue(), consumedGrams, phDynamics);
 
   if (decision.action == TitrationAction::Dose) {
     activePulseMs = decision.pumpPulseMs;
@@ -1474,7 +1531,7 @@ void runController() {
     if (wasRunning) {
       setState(RunState::Settling, "Settling");
     } else {
-      resultValue = computeTitrationResult(settings, activeTitrantMolarity(), consumedGrams, settings.sampleGrams);
+      resultValue = computeCurrentResult();
       setState(RunState::Done, reasonLabel(stopReason));
     }
   } else {
@@ -1772,7 +1829,11 @@ String htmlPage() {
   page += String(titrantPumpFlowRateGps, 3);
   page += F("</span> g/s / Sample flow <span id='samplegps'>");
   page += String(samplePumpFlowRateGps, 3);
-  page += F("</span> g/s</p><p class='tiny'>Use pH or mV as the endpoint, then choose whether dosing makes that signal rise or fall.</p><button class='primary' type='submit'>Save settings</button></form>");
+  page += F("</span> g/s</p><p class='tiny'>Use pH or mV as the endpoint, then choose whether dosing makes that signal rise or fall.");
+  if (autoEqpEnabled()) {
+    page += F(" EDTA hardness uses automatic EQP stop from the mV slope curve.");
+  }
+  page += F("</p><button class='primary' type='submit'>Save settings</button></form>");
 
   page += F("<form action='/set' method='get' class='card' style='margin-top:10px'><h2>WiFi</h2><div class='row'>");
   page += F("<label>SSID<input name='ssid' maxlength='32' value='");
@@ -1786,13 +1847,13 @@ String htmlPage() {
   page += F("<div class='card'><h2>Endpoint Control</h2><p><span class='term'>Control band</span> is the near-target zone. Larger values slow dosing earlier; smaller values dose faster but risk overshoot.</p><p><span class='term'>Stable delta/s</span> is the allowed signal drift while settling. Lower values wait for a flatter response.</p><p><span class='term'>Hold s</span> confirms the endpoint after it is reached. If the signal moves back out, dosing resumes.</p><p><span class='term'>Min / Max settle s</span> controls wait time after each pulse. Slow probes or slow reactions need longer settling.</p><p><span class='term'>Max time s</span> stops a run that takes too long.</p></div>");
   page += F("<div class='card'><h2>Calibration</h2><p><span class='term'>Enter ready</span> stops both pumps before any calibration action.</p><p><span class='term'>Pump flow</span> measures titrant and sample pump delivery in g/s. Recalibrate after tubing, pump head, or liquid changes.</p><p><span class='term'>Scale</span> uses tare for the reactor baseline; scale factor is the grams conversion value.</p><p><span class='term'>pH/mV sensor</span> stores two buffer points and reports slope %, pH7 offset, and status. Reset pH/mV filter only restarts acquisition.</p><p><span class='term'>Titrant standard</span> is configured in Admin through molarity, blank, and result formula.</p></div>");
   page += F("<div class='card'><h2>Dosing and Results</h2><p><span class='term'>Titrant</span> selects the known solution. Manual mol/L is used only when titrant is Manual.</p><p><span class='term'>Max used g</span> is the safety limit for titrant consumption.</p><p><span class='term'>Sample g</span> is the sample mass delivered by the P1 pump before titration.</p><p><span class='term'>Result formula</span> controls only calculation and display; it does not change pump control.</p><p><span class='term'>Blank g</span> subtracts blank titration consumption before calculating and is saved per Method.</p><p><span class='term'>Density g/mL</span> converts scale mass to mL for molarity and EDTA hardness. Defaults 1.000 for water-like solutions.</p><p><span class='term'>Manual factor</span> uses result = net titrant g x factor / sample g for custom tests. Manual mol/L, blank, densities, and factor are method auxiliary values.</p></div>");
-  page += F("<div class='card'><h2>Run Data and EQP</h2><p><span class='term'>Time s</span> is the safer default X axis because data keeps moving even while used g is unchanged.</p><p><span class='term'>Used g</span> is useful for final analysis after enough dose changes have happened.</p><p><span class='term'>Auto EQP</span> marks the largest d(signal)/d(used g) candidate. It is an analysis point, not an automatic stop command.</p><p><span class='term'>Suggest Params</span> estimates control band, stable delta, and settle time from the current curve. It does not apply settings automatically.</p><p>Click the curve to manually correct the EQP point, then export CSV or JSON to save the run on the computer.</p></div>");
+  page += F("<div class='card'><h2>Run Data and EQP</h2><p><span class='term'>Time s</span> is the safer default X axis because data keeps moving even while used g is unchanged.</p><p><span class='term'>Used g</span> is useful for final analysis after enough dose changes have happened.</p><p><span class='term'>Auto EQP</span> on the chart marks the largest d(signal)/d(used g) candidate for review. EDTA hardness also uses a firmware-side EQP tracker to stop after the mV slope peak falls back.</p><p><span class='term'>Suggest Params</span> estimates control band, stable delta, and settle time from the current curve. It does not apply settings automatically.</p><p>Click the curve to manually correct the EQP point, then export CSV or JSON to save the run on the computer.</p></div>");
   page += F("</div></section>");
   page += F("<script>");
   page += F("function text(id,v){var e=document.getElementById(id);if(e)e.textContent=v}");
   page += F("function html(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v}");
   page += F("var curve=[],curveStart=0,eqpManual=null,lastPlot=[];function num(v){return Number(v||0)}function curveTarget(d){return d.endpoint==='mV'?num(d.target_mv):num(d.target_ph)}");
-  page += F("function recordCurve(d){if(!d.adc_ok)return;var now=Date.now();if(!curveStart)curveStart=now;curve.push({ts:new Date(now).toISOString(),elapsed_s:(now-curveStart)/1000,ph:num(d.ph),mv:num(d.mv),used_g:num(d.used_g),sample_g:num(d.sample_delivered_g),endpoint:d.endpoint,target:curveTarget(d),trend:d.mode,state:d.state,pump:!!d.pump,pulse_ms:num(d.pump_pulse_ms),status:d.status,method:d.method,result_value:num(d.result_value),result_unit:d.result_unit,result_formula:d.result_formula,blank_g:num(d.blank_g),titrant_density:num(d.titrant_density),sample_density:num(d.sample_density),manual_factor:num(d.manual_factor)});if(curve.length>2000)curve.shift();drawCurve()}");
+  page += F("function recordCurve(d){if(!d.adc_ok)return;var now=Date.now();if(!curveStart)curveStart=now;curve.push({ts:new Date(now).toISOString(),elapsed_s:(now-curveStart)/1000,ph:num(d.ph),mv:num(d.mv),used_g:num(d.used_g),endpoint_used_g:num(d.endpoint_used_g),sample_g:num(d.sample_delivered_g),endpoint:d.endpoint,target:curveTarget(d),trend:d.mode,state:d.state,pump:!!d.pump,pulse_ms:num(d.pump_pulse_ms),status:d.status,method:d.method,result_value:num(d.result_value),result_unit:d.result_unit,result_formula:d.result_formula,blank_g:num(d.blank_g),titrant_density:num(d.titrant_density),sample_density:num(d.sample_density),auto_eqp:!!d.auto_eqp,eqp_reached:!!d.eqp_reached,eqp_used_g:num(d.eqp_used_g),eqp_signal:num(d.eqp_signal),eqp_slope:num(d.eqp_slope),manual_factor:num(d.manual_factor)});if(curve.length>2000)curve.shift();drawCurve()}");
   page += F("function dosePoints(){var pts=[];curve.forEach(function(p){if(!isFinite(p.used_g))return;if(pts.length&&Math.abs(p.used_g-pts[pts.length-1].used_g)<0.01){pts[pts.length-1]=p}else pts.push(p)});return pts}");
   page += F("function analyzeEqp(){var pts=dosePoints();if(pts.length<3)return null;var yk=pts[pts.length-1].endpoint==='mV'?'mv':'ph',best=null;for(var i=1;i<pts.length;i++){var dx=pts[i].used_g-pts[i-1].used_g;if(Math.abs(dx)<0.01)continue;var dy=pts[i][yk]-pts[i-1][yk],s=Math.abs(dy/dx);if(!best||s>best.slope){best={mode:'auto',index:i,used_g:pts[i].used_g,elapsed_s:pts[i].elapsed_s,signal:pts[i][yk],ph:pts[i].ph,mv:pts[i].mv,endpoint:pts[i].endpoint,slope:s}}}return best}");
   page += F("function currentEqp(){var a=analyzeEqp();return eqpManual||a}function eqpText(e){if(!e)return 'EQP waits for at least 3 dose-change points.';var v=e.endpoint==='mV'?e.signal.toFixed(0)+' mV':e.signal.toFixed(2)+' pH';return (e.mode==='manual'?'Manual':'Auto')+' EQP: '+e.used_g.toFixed(2)+' g, '+v+', slope '+e.slope.toFixed(e.endpoint==='mV'?1:3)+' '+e.endpoint+'/g'}");
@@ -2075,6 +2136,7 @@ void handleSet() {
   }
   if (endpointChanged) {
     phDynamics.reset();
+    eqpTracker.reset();
   }
   statusLine = wifiChanged ? "WiFi saved" : (calibrationChanged ? "Calibration saved" : (methodChanged ? "Method loaded" : "Settings saved"));
   displayDirty = true;
@@ -2187,6 +2249,7 @@ void handleJson() {
   json += ",\"bottle_g\":" + String(scaleReady ? lastScale.grams : -1.0f, 1);
   json += ",\"raw_bottle_g\":" + String(scaleReady ? lastScale.rawGrams : -1.0f, 1);
   json += ",\"used_g\":" + String(consumedGrams, 1);
+  json += ",\"endpoint_used_g\":" + String(resultConsumedGrams(), 2);
   json += ",\"sample_g\":" + String(settings.sampleGrams, 1);
   json += ",\"sample_delivered_g\":" + String(sampleDeliveredGrams, 1);
   json += ",\"titrant\":\"" + jsonEscape(titrantLabel()) + "\"";
@@ -2201,6 +2264,12 @@ void handleJson() {
   json += ",\"manual_factor\":" + String(settings.manualResultFactor, 4);
   json += ",\"method\":\"" + String(methodValue(currentMethod)) + "\"";
   json += ",\"method_label\":\"" + jsonEscape(methodLabel(currentMethod)) + "\"";
+  json += ",\"auto_eqp\":" + String(autoEqpEnabled() ? "true" : "false");
+  json += ",\"eqp_reached\":" + String(eqpTracker.reached ? "true" : "false");
+  json += ",\"eqp_points\":" + String(eqpTracker.count);
+  json += ",\"eqp_used_g\":" + String(eqpTracker.bestUsedGrams, 2);
+  json += ",\"eqp_signal\":" + String(eqpTracker.bestSignal, 1);
+  json += ",\"eqp_slope\":" + String(eqpTracker.bestSlope, 1);
   json += ",\"endpoint\":\"" + String(endpointText()) + "\"";
   json += ",\"target_mv\":" + String(settings.targetMillivolts, 0);
   json += ",\"target_ph\":" + String(settings.targetPh, 2);

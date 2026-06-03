@@ -271,6 +271,7 @@ Open the controller IP in a browser.
 - The x axis can be `Used g` or `Time s`.
 - **Clear** only clears the browser-side curve data. It does not change K10 settings.
 - **Auto EQP** computes the maximum `d(signal)/d(used_g)` slope between dose-change points and marks the candidate equivalence point with a yellow line and dot.
+- In **EDTA hardness**, the firmware also runs an EQP tracker. It records stable mV-vs-used-g points and stops after the mV slope peak is followed by two lower-slope segments.
 - Click a plotted point to manually correct the EQP candidate; click **Auto EQP** again to clear the manual correction.
 - **Suggest Params** estimates `Control band`, `Stable delta/s`, and `Min / Max settle s` from the current curve. It only displays suggestions and does not change settings automatically.
 - **CSV** / **JSON** downloads the current curve data to the computer. K10 does not write curve data to flash.
@@ -308,6 +309,7 @@ Open the controller IP in a browser.
 - **Result formula**: acid/base concentration, EDTA total hardness (mg/L as CaCO3), or manual factor.
 - **Blank g**: blank titration consumption subtracted from titrant use before calculation.
 - **Titrant density g/mL / Sample density g/mL**: converts scale mass to mL for molarity and EDTA hardness calculations. Leave both at `1.000` for water-like solutions.
+- **EDTA hardness automatic EQP**: this method ignores the fixed target mV as the normal stop condition and uses the mV slope peak instead; max used and max time still protect the run.
 - **Manual factor**: conversion factor used by the manual result formula.
 - **Auxiliary value storage**: `Manual mol/L`, `Blank g`, densities, and `Manual factor` are saved per current Method. Editing them does not switch the Method to Manual.
 - **WiFi**: STA SSID and password. Saved to flash; controller restarts automatically.

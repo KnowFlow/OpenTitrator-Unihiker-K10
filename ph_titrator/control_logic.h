@@ -47,11 +47,14 @@ enum class TitrationAction : uint8_t {
 enum class TitrationStopReason : uint8_t {
   None,
   TargetReached,
+  EquivalencePoint,
   MassLimit,
   TimeLimit,
   InvalidReading,
   SensorFault
 };
+
+inline float absoluteFloat(float value);
 
 struct TitrationSettings {
   TitrationMode mode = TitrationMode::AddBase;
@@ -83,6 +86,89 @@ struct TitrationDecision {
   TitrationStopReason reason = TitrationStopReason::None;
   uint16_t pumpPulseMs = 0;
   uint16_t settleMs = 10000;
+};
+
+struct EqpTracker {
+  static constexpr uint8_t MaxPoints = 8;
+  float usedGrams[MaxPoints] = {};
+  float signal[MaxPoints] = {};
+  uint8_t count = 0;
+  float lastSlope = 0.0f;
+  float bestSlope = 0.0f;
+  float bestUsedGrams = 0.0f;
+  float bestSignal = 0.0f;
+  uint8_t slopesAfterBest = 0;
+  bool reached = false;
+
+  void reset() {
+    count = 0;
+    lastSlope = 0.0f;
+    bestSlope = 0.0f;
+    bestUsedGrams = 0.0f;
+    bestSignal = 0.0f;
+    slopesAfterBest = 0;
+    reached = false;
+    for (uint8_t i = 0; i < MaxPoints; i++) {
+      usedGrams[i] = 0.0f;
+      signal[i] = 0.0f;
+    }
+  }
+
+  bool add(float used, float value) {
+    constexpr float minDoseStepGrams = 0.01f;
+    constexpr float minPeakSlope = 10.0f;
+    constexpr float dropRatio = 0.55f;
+    constexpr uint8_t confirmSlopes = 2;
+
+    if (count > 0 && absoluteFloat(used - usedGrams[count - 1]) < minDoseStepGrams) {
+      signal[count - 1] = value;
+      return reached;
+    }
+
+    if (count == MaxPoints) {
+      for (uint8_t i = 1; i < MaxPoints; i++) {
+        usedGrams[i - 1] = usedGrams[i];
+        signal[i - 1] = signal[i];
+      }
+      count = MaxPoints - 1;
+    }
+
+    usedGrams[count] = used;
+    signal[count] = value;
+    count++;
+
+    if (count < 2) {
+      return reached;
+    }
+
+    float dx = usedGrams[count - 1] - usedGrams[count - 2];
+    if (absoluteFloat(dx) < minDoseStepGrams) {
+      return reached;
+    }
+
+    float dy = signal[count - 1] - signal[count - 2];
+    lastSlope = absoluteFloat(dy / dx);
+    if (lastSlope > bestSlope) {
+      bestSlope = lastSlope;
+      bestUsedGrams = usedGrams[count - 1];
+      bestSignal = signal[count - 1];
+      slopesAfterBest = 0;
+      return reached;
+    }
+
+    if (bestSlope >= minPeakSlope && lastSlope <= bestSlope * dropRatio) {
+      if (slopesAfterBest < 255) {
+        slopesAfterBest++;
+      }
+    } else {
+      slopesAfterBest = 0;
+    }
+
+    if (count >= 4 && bestSlope >= minPeakSlope && slopesAfterBest >= confirmSlopes) {
+      reached = true;
+    }
+    return reached;
+  }
 };
 
 struct PhFilter {
@@ -133,8 +219,6 @@ struct PhFilter {
     return (float)sum / (float)(Window - 2);
   }
 };
-
-inline float absoluteFloat(float value);
 
 struct TitrationDynamics {
   static constexpr uint8_t N = 5;
@@ -610,6 +694,48 @@ inline TitrationDecision decideAdaptiveDose(
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 25;
     d.settleMs = clampSettleMs(settings, 15000);
+  }
+  return d;
+}
+
+inline TitrationDecision decideEqpDose(
+    const TitrationSettings &settings,
+    float currentValue,
+    float consumedGrams,
+    const EqpTracker &eqp) {
+  TitrationDecision d;
+
+  if (!isValidControlValue(settings, currentValue)) {
+    d.action = TitrationAction::Error;
+    d.reason = TitrationStopReason::InvalidReading;
+    return d;
+  }
+
+  if (consumedGrams >= settings.maxConsumedGrams) {
+    d.action = TitrationAction::Error;
+    d.reason = TitrationStopReason::MassLimit;
+    return d;
+  }
+
+  if (eqp.reached) {
+    d.action = TitrationAction::Done;
+    d.reason = TitrationStopReason::EquivalencePoint;
+    return d;
+  }
+
+  d.action = TitrationAction::Dose;
+  if (eqp.bestSlope >= 80.0f || eqp.slopesAfterBest > 0) {
+    d.pumpPulseMs = 25;
+    d.settleMs = clampSettleMs(settings, 15000);
+  } else if (eqp.bestSlope >= 30.0f) {
+    d.pumpPulseMs = 60;
+    d.settleMs = clampSettleMs(settings, 12000);
+  } else if (eqp.count < 3) {
+    d.pumpPulseMs = 150;
+    d.settleMs = clampSettleMs(settings, 8000);
+  } else {
+    d.pumpPulseMs = 100;
+    d.settleMs = clampSettleMs(settings, 10000);
   }
   return d;
 }
