@@ -40,6 +40,7 @@ enum class ResultFormula : uint8_t {
 
 enum class TitrationAction : uint8_t {
   Dose,
+  Wait,
   Done,
   Error
 };
@@ -674,6 +675,15 @@ inline TitrationDecision decideAdaptiveDose(
   const float farError = settings.controlBand * 3.0f;
   const float mediumError = settings.controlBand;
   const float nearError = settings.controlBand * 0.33f;
+  if (settings.endpoint == ControlEndpoint::Ph && driftingTowardTarget) {
+    float watchZone = doseRaisesValue ? target - 1.5f : target + 1.5f;
+    bool inWatchZone = doseRaisesValue ? currentValue >= watchZone : currentValue <= watchZone;
+    if (inWatchZone) {
+      d.action = TitrationAction::Wait;
+      d.settleMs = clampSettleMs(settings, 20000);
+      return d;
+    }
+  }
   if (steep) {
     d.action = TitrationAction::Dose;
     d.pumpPulseMs = 25;
