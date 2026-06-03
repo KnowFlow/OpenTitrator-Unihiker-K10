@@ -307,6 +307,7 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - **Result formula**：酸碱浓度、EDTA 总硬度（mg/L as CaCO3）或手动系数。
 - **Blank g**：空白滴定消耗量，计算结果时从滴定剂用量中扣除。
 - **Manual factor**：手动公式使用的换算系数。
+- **辅助值保存**：`Manual mol/L`、`Blank g` 和 `Manual factor` 按当前 Method 单独保存；修改这些值不会把方法切换成 Manual。
 - **WiFi**：STA 的 SSID 和密码。保存后自动重启。
 
 ### Guide 参数说明

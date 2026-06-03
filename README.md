@@ -91,7 +91,8 @@ The project is evolving from a pH titrator into a general potentiometric titrato
 - [x] Web-side curves: browser records `/json` data, saves on the computer, and exports CSV/JSON.
 - [x] Lightweight EQP analysis: compute slope from curve data and mark the equivalence point.
 - [x] Result calculation for acid/base concentration, EDTA hardness, and manual factors.
-- [ ] Advanced features: learning titration, method workflow, blank values, sample series, and reports.
+- [x] Method-level blank and auxiliary values: store blank, manual molarity, and manual factor per Method.
+- [ ] Advanced features: method workflow, sample series, and reports.
 
 ---
 

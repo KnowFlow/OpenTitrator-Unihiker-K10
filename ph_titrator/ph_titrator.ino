@@ -572,6 +572,12 @@ String staIpAddress = "0.0.0.0";
 String wifiSsid = "";
 String wifiPassword = "";
 
+struct MethodAuxValues {
+  float titrantMolarity = 0.01f;
+  float blankGrams = 0.0f;
+  float manualResultFactor = 1.0f;
+};
+
 bool devicePresent(uint8_t address) {
   Wire.beginTransmission(address);
   return Wire.endTransmission() == 0;
@@ -729,6 +735,74 @@ TitrationMethod methodFromValue(const String &value) {
   return TitrationMethod::PhEndpoint;
 }
 
+const char *methodAuxPrefix(TitrationMethod method) {
+  switch (method) {
+    case TitrationMethod::PhEndpoint: return "ph";
+    case TitrationMethod::MvEndpoint: return "mv";
+    case TitrationMethod::EdtaHardness: return "edta";
+    case TitrationMethod::Manual: return "manual";
+  }
+  return "ph";
+}
+
+String methodAuxKey(TitrationMethod method, const char *suffix) {
+  String key = methodAuxPrefix(method);
+  key += "_";
+  key += suffix;
+  return key;
+}
+
+MethodAuxValues defaultMethodAux(TitrationMethod method) {
+  TitrationSettings preset;
+  applyTitrationMethodPreset(preset, method);
+  MethodAuxValues aux;
+  aux.titrantMolarity = preset.titrantMolarity;
+  aux.blankGrams = preset.blankGrams;
+  aux.manualResultFactor = preset.manualResultFactor;
+  return aux;
+}
+
+MethodAuxValues loadMethodAux(TitrationMethod method) {
+  MethodAuxValues aux = defaultMethodAux(method);
+  Preferences prefs;
+  if (prefs.begin("method_aux", true)) {
+    String molarityKey = methodAuxKey(method, "m");
+    String blankKey = methodAuxKey(method, "blank");
+    String factorKey = methodAuxKey(method, "factor");
+    aux.titrantMolarity = prefs.getFloat(molarityKey.c_str(), aux.titrantMolarity);
+    aux.blankGrams = prefs.getFloat(blankKey.c_str(), aux.blankGrams);
+    aux.manualResultFactor = prefs.getFloat(factorKey.c_str(), aux.manualResultFactor);
+    prefs.end();
+  }
+  aux.titrantMolarity = constrain(aux.titrantMolarity, 0.0001f, 10.0f);
+  aux.blankGrams = constrain(aux.blankGrams, 0.0f, 1000.0f);
+  aux.manualResultFactor = constrain(aux.manualResultFactor, -1000000.0f, 1000000.0f);
+  return aux;
+}
+
+void applyMethodAux(TitrationSettings &targetSettings, const MethodAuxValues &aux) {
+  targetSettings.titrantMolarity = aux.titrantMolarity;
+  targetSettings.blankGrams = aux.blankGrams;
+  targetSettings.manualResultFactor = aux.manualResultFactor;
+}
+
+void loadMethodAuxIntoSettings(TitrationMethod method) {
+  applyMethodAux(settings, loadMethodAux(method));
+}
+
+void saveMethodAux(TitrationMethod method) {
+  Preferences prefs;
+  if (prefs.begin("method_aux", false)) {
+    String molarityKey = methodAuxKey(method, "m");
+    String blankKey = methodAuxKey(method, "blank");
+    String factorKey = methodAuxKey(method, "factor");
+    prefs.putFloat(molarityKey.c_str(), settings.titrantMolarity);
+    prefs.putFloat(blankKey.c_str(), settings.blankGrams);
+    prefs.putFloat(factorKey.c_str(), settings.manualResultFactor);
+    prefs.end();
+  }
+}
+
 void saveSelectedMethod() {
   if (preferences.begin("method", false)) {
     preferences.putUChar("selected", (uint8_t)currentMethod);
@@ -745,11 +819,13 @@ void loadSelectedMethod() {
     }
   }
   applyTitrationMethodPreset(settings, currentMethod);
+  loadMethodAuxIntoSettings(currentMethod);
 }
 
 void selectMethod(TitrationMethod method, bool persist) {
   currentMethod = method;
   applyTitrationMethodPreset(settings, currentMethod);
+  loadMethodAuxIntoSettings(currentMethod);
   phFilter.reset();
   phDynamics.reset();
   phReady = false;
@@ -774,16 +850,63 @@ bool methodMatchesPreset(TitrationMethod method) {
          absoluteFloat(preset.targetMillivolts - settings.targetMillivolts) <= 0.001f &&
          absoluteFloat(preset.maxConsumedGrams - settings.maxConsumedGrams) <= 0.001f &&
          absoluteFloat(preset.sampleGrams - settings.sampleGrams) <= 0.001f &&
-         absoluteFloat(preset.titrantMolarity - settings.titrantMolarity) <= 0.00001f &&
          preset.resultFormula == settings.resultFormula &&
-         absoluteFloat(preset.blankGrams - settings.blankGrams) <= 0.001f &&
-         absoluteFloat(preset.manualResultFactor - settings.manualResultFactor) <= 0.001f &&
          absoluteFloat(preset.controlBand - settings.controlBand) <= 0.001f &&
          absoluteFloat(preset.stableDelta - settings.stableDelta) <= 0.001f &&
          preset.holdSeconds == settings.holdSeconds &&
          preset.minSettleSeconds == settings.minSettleSeconds &&
          preset.maxSettleSeconds == settings.maxSettleSeconds &&
          preset.maxTimeSeconds == settings.maxTimeSeconds;
+}
+
+void appendMethodPresetJs(String &page, TitrationMethod method, bool addComma) {
+  TitrationSettings preset;
+  applyTitrationMethodPreset(preset, method);
+  applyMethodAux(preset, loadMethodAux(method));
+  page += methodValue(method);
+  page += F(":{endpoint:'");
+  page += preset.endpoint == ControlEndpoint::Millivolts ? F("mv") : F("ph");
+  page += F("',trend:'");
+  page += preset.controlTrend == ControlTrend::Decrease ? F("fall") : F("rise");
+  page += F("',target:'");
+  page += String(preset.targetPh, 2);
+  page += F("',target_mv:'");
+  page += String(preset.targetMillivolts, 0);
+  page += F("',max:'");
+  page += String(preset.maxConsumedGrams, 1);
+  page += F("',sample:'");
+  page += String(preset.sampleGrams, 1);
+  page += F("',titrant:'");
+  switch (preset.titrantPreset) {
+    case TitrantPreset::Naoh001: page += F("naoh001"); break;
+    case TitrantPreset::Hcl001: page += F("hcl001"); break;
+    case TitrantPreset::Edta001: page += F("edta001"); break;
+    case TitrantPreset::Manual: page += F("manual"); break;
+  }
+  page += F("',titrant_m:'");
+  page += String(preset.titrantMolarity, 4);
+  page += F("',result_formula:'");
+  page += resultFormulaValue(preset.resultFormula);
+  page += F("',blank_g:'");
+  page += String(preset.blankGrams, 2);
+  page += F("',manual_factor:'");
+  page += String(preset.manualResultFactor, 4);
+  page += F("',control_band:'");
+  page += String(preset.controlBand, preset.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
+  page += F("',stable_delta:'");
+  page += String(preset.stableDelta, preset.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
+  page += F("',hold_s:'");
+  page += String(preset.holdSeconds);
+  page += F("',min_settle_s:'");
+  page += String(preset.minSettleSeconds);
+  page += F("',max_settle_s:'");
+  page += String(preset.maxSettleSeconds);
+  page += F("',max_time_s:'");
+  page += String(preset.maxTimeSeconds);
+  page += F("'}");
+  if (addComma) {
+    page += F(",");
+  }
 }
 
 String stateLabel() {
@@ -1638,7 +1761,7 @@ String htmlPage() {
   page += F("<div class='card'><h2>Method and Endpoint</h2><p><span class='term'>Method</span> loads a preset group of endpoint, titrant, result formula, and control defaults. Manual keeps custom values.</p><p><span class='term'>Endpoint</span> selects the control signal. Use pH for acid/base endpoint work, or mV for potentiometric endpoints.</p><p><span class='term'>Signal trend</span> tells the controller whether dosing should raise or lower the endpoint signal.</p><p><span class='term'>Target pH / mV</span> is the EP stop value. Only the active endpoint is used for control.</p></div>");
   page += F("<div class='card'><h2>Endpoint Control</h2><p><span class='term'>Control band</span> is the near-target zone. Larger values slow dosing earlier; smaller values dose faster but risk overshoot.</p><p><span class='term'>Stable delta/s</span> is the allowed signal drift while settling. Lower values wait for a flatter response.</p><p><span class='term'>Hold s</span> confirms the endpoint after it is reached. If the signal moves back out, dosing resumes.</p><p><span class='term'>Min / Max settle s</span> controls wait time after each pulse. Slow probes or slow reactions need longer settling.</p><p><span class='term'>Max time s</span> stops a run that takes too long.</p></div>");
   page += F("<div class='card'><h2>Calibration</h2><p><span class='term'>Enter ready</span> stops both pumps before any calibration action.</p><p><span class='term'>Pump flow</span> measures titrant and sample pump delivery in g/s. Recalibrate after tubing, pump head, or liquid changes.</p><p><span class='term'>Scale</span> uses tare for the reactor baseline; scale factor is the grams conversion value.</p><p><span class='term'>pH/mV sensor</span> stores two buffer points and reports slope %, pH7 offset, and status. Reset pH/mV filter only restarts acquisition.</p><p><span class='term'>Titrant standard</span> is configured in Admin through molarity, blank, and result formula.</p></div>");
-  page += F("<div class='card'><h2>Dosing and Results</h2><p><span class='term'>Titrant</span> selects the known solution. Manual mol/L is used only when titrant is Manual.</p><p><span class='term'>Max used g</span> is the safety limit for titrant consumption.</p><p><span class='term'>Sample g</span> is the sample mass delivered by the P1 pump before titration.</p><p><span class='term'>Result formula</span> controls only calculation and display; it does not change pump control.</p><p><span class='term'>Blank g</span> subtracts blank titration consumption before calculating.</p><p><span class='term'>Manual factor</span> uses result = net titrant g x factor / sample g for custom tests.</p></div>");
+  page += F("<div class='card'><h2>Dosing and Results</h2><p><span class='term'>Titrant</span> selects the known solution. Manual mol/L is used only when titrant is Manual.</p><p><span class='term'>Max used g</span> is the safety limit for titrant consumption.</p><p><span class='term'>Sample g</span> is the sample mass delivered by the P1 pump before titration.</p><p><span class='term'>Result formula</span> controls only calculation and display; it does not change pump control.</p><p><span class='term'>Blank g</span> subtracts blank titration consumption before calculating and is saved per Method.</p><p><span class='term'>Manual factor</span> uses result = net titrant g x factor / sample g for custom tests. Manual mol/L, blank, and factor are method auxiliary values.</p></div>");
   page += F("<div class='card'><h2>Run Data and EQP</h2><p><span class='term'>Time s</span> is the safer default X axis because data keeps moving even while used g is unchanged.</p><p><span class='term'>Used g</span> is useful for final analysis after enough dose changes have happened.</p><p><span class='term'>Auto EQP</span> marks the largest d(signal)/d(used g) candidate. It is an analysis point, not an automatic stop command.</p><p><span class='term'>Suggest Params</span> estimates control band, stable delta, and settle time from the current curve. It does not apply settings automatically.</p><p>Click the curve to manually correct the EQP point, then export CSV or JSON to save the run on the computer.</p></div>");
   page += F("</div></section>");
   page += F("<script>");
@@ -1674,7 +1797,12 @@ String htmlPage() {
   page += F("function activateTab(name){var p=document.getElementById('tab-'+name);if(!p)return;document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.tab===name)});document.querySelectorAll('.panel').forEach(function(x){x.classList.remove('active')});p.classList.add('active')}");
   page += F("document.querySelectorAll('.tab').forEach(function(b){b.onclick=function(){activateTab(b.dataset.tab);location.hash=b.dataset.tab}});var initial=(location.hash||'#run').slice(1);activateTab(initial);");
   page += F("['chartX','chartY'].forEach(function(id){var e=document.getElementById(id);if(e)e.onchange=drawCurve});var cv=document.getElementById('curveCanvas');if(cv)cv.onclick=chooseEqpAt;var ea=document.getElementById('eqpAuto');if(ea)ea.onclick=function(){eqpManual=null;drawCurve()};var lp=document.getElementById('learnParams');if(lp)lp.onclick=suggestParams;var cc=document.getElementById('curveClear');if(cc)cc.onclick=function(){curve=[];curveStart=0;eqpManual=null;text('learnInfo','Suggestions wait for at least 4 dose-change points.');drawCurve()};var ec=document.getElementById('curveCsv');if(ec)ec.onclick=function(){exportCurve('csv')};var ej=document.getElementById('curveJson');if(ej)ej.onclick=function(){exportCurve('json')};drawCurve();");
-  page += F("var presets={ph_ep:{endpoint:'ph',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'naoh001',titrant_m:'0.0100',result_formula:'acid_base_m',blank_g:'0.00',manual_factor:'1.0000',control_band:'0.300',stable_delta:'0.005',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},mv_ep:{endpoint:'mv',trend:'rise',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'manual',titrant_m:'0.0100',result_formula:'manual_factor',blank_g:'0.00',manual_factor:'1.0000',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'},edta_hardness:{endpoint:'mv',trend:'fall',target:'7.00',target_mv:'0',max:'20.0',sample:'20.0',titrant:'edta001',titrant_m:'0.0100',result_formula:'edta_hardness',blank_g:'0.00',manual_factor:'1.0000',control_band:'30.0',stable_delta:'0.5',hold_s:'5',min_settle_s:'5',max_settle_s:'30',max_time_s:'1800'}};");
+  page += F("var presets={");
+  appendMethodPresetJs(page, TitrationMethod::PhEndpoint, true);
+  appendMethodPresetJs(page, TitrationMethod::MvEndpoint, true);
+  appendMethodPresetJs(page, TitrationMethod::EdtaHardness, true);
+  appendMethodPresetJs(page, TitrationMethod::Manual, false);
+  page += F("};");
   page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m);setv('resultFormulaSelect',p.result_formula);setv('blankInput',p.blank_g);setv('manualFactorInput',p.manual_factor);setv('controlBandInput',p.control_band);setv('stableDeltaInput',p.stable_delta);setv('holdInput',p.hold_s);setv('minSettleInput',p.min_settle_s);setv('maxSettleInput',p.max_settle_s);setv('maxTimeInput',p.max_time_s)});");
   page += F("var mf=document.getElementById('manualForm');if(mf)mf.addEventListener('submit',async function(e){e.preventDefault();var fd=new FormData(mf);var cmd=e.submitter&&e.submitter.name?e.submitter.value:fd.get('cmd');fd.set('cmd',cmd);fd.set('ajax','1');try{await fetch('/action?'+new URLSearchParams(fd).toString(),{cache:'no-store'});poll()}catch(err){}});");
   page += F("</script></main></body></html>");
@@ -1706,6 +1834,7 @@ void handleSet() {
   bool methodRequested = false;
   bool methodChanged = false;
   bool methodFieldChanged = false;
+  bool methodAuxChanged = false;
   TitrationMethod requestedMethod = currentMethod;
   if (server.hasArg("method")) {
     methodRequested = true;
@@ -1767,7 +1896,7 @@ void handleSet() {
   }
   if (server.hasArg("titrant_m")) {
     float nextMolarity = constrain(server.arg("titrant_m").toFloat(), 0.0001f, 10.0f);
-    methodFieldChanged = methodFieldChanged || absoluteFloat(nextMolarity - settings.titrantMolarity) > 0.00001f;
+    methodAuxChanged = methodAuxChanged || absoluteFloat(nextMolarity - settings.titrantMolarity) > 0.00001f;
     settings.titrantMolarity = nextMolarity;
   }
   if (server.hasArg("result_formula")) {
@@ -1783,12 +1912,12 @@ void handleSet() {
   }
   if (server.hasArg("blank_g")) {
     float nextBlank = constrain(server.arg("blank_g").toFloat(), 0.0f, 1000.0f);
-    methodFieldChanged = methodFieldChanged || absoluteFloat(nextBlank - settings.blankGrams) > 0.001f;
+    methodAuxChanged = methodAuxChanged || absoluteFloat(nextBlank - settings.blankGrams) > 0.001f;
     settings.blankGrams = nextBlank;
   }
   if (server.hasArg("manual_factor")) {
     float nextFactor = constrain(server.arg("manual_factor").toFloat(), -1000000.0f, 1000000.0f);
-    methodFieldChanged = methodFieldChanged || absoluteFloat(nextFactor - settings.manualResultFactor) > 0.001f;
+    methodAuxChanged = methodAuxChanged || absoluteFloat(nextFactor - settings.manualResultFactor) > 0.001f;
     settings.manualResultFactor = nextFactor;
   }
   if (server.hasArg("control_band")) {
@@ -1906,6 +2035,9 @@ void handleSet() {
     saveSelectedMethod();
   } else if (methodRequested) {
     saveSelectedMethod();
+  }
+  if (methodAuxChanged) {
+    saveMethodAux(currentMethod);
   }
   if (endpointChanged) {
     phDynamics.reset();

@@ -307,6 +307,7 @@ Open the controller IP in a browser.
 - **Result formula**: acid/base concentration, EDTA total hardness (mg/L as CaCO3), or manual factor.
 - **Blank g**: blank titration consumption subtracted from titrant use before calculation.
 - **Manual factor**: conversion factor used by the manual result formula.
+- **Auxiliary value storage**: `Manual mol/L`, `Blank g`, and `Manual factor` are saved per current Method. Editing them does not switch the Method to Manual.
 - **WiFi**: STA SSID and password. Saved to flash; controller restarts automatically.
 
 ### Guide Parameter Notes
