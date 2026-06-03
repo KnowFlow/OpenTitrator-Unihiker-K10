@@ -575,6 +575,8 @@ String wifiPassword = "";
 struct MethodAuxValues {
   float titrantMolarity = 0.01f;
   float blankGrams = 0.0f;
+  float titrantDensityGramsPerMl = 1.0f;
+  float sampleDensityGramsPerMl = 1.0f;
   float manualResultFactor = 1.0f;
 };
 
@@ -758,6 +760,8 @@ MethodAuxValues defaultMethodAux(TitrationMethod method) {
   MethodAuxValues aux;
   aux.titrantMolarity = preset.titrantMolarity;
   aux.blankGrams = preset.blankGrams;
+  aux.titrantDensityGramsPerMl = preset.titrantDensityGramsPerMl;
+  aux.sampleDensityGramsPerMl = preset.sampleDensityGramsPerMl;
   aux.manualResultFactor = preset.manualResultFactor;
   return aux;
 }
@@ -768,14 +772,20 @@ MethodAuxValues loadMethodAux(TitrationMethod method) {
   if (prefs.begin("method_aux", true)) {
     String molarityKey = methodAuxKey(method, "m");
     String blankKey = methodAuxKey(method, "blank");
+    String titrantDensityKey = methodAuxKey(method, "tdens");
+    String sampleDensityKey = methodAuxKey(method, "sdens");
     String factorKey = methodAuxKey(method, "factor");
     aux.titrantMolarity = prefs.getFloat(molarityKey.c_str(), aux.titrantMolarity);
     aux.blankGrams = prefs.getFloat(blankKey.c_str(), aux.blankGrams);
+    aux.titrantDensityGramsPerMl = prefs.getFloat(titrantDensityKey.c_str(), aux.titrantDensityGramsPerMl);
+    aux.sampleDensityGramsPerMl = prefs.getFloat(sampleDensityKey.c_str(), aux.sampleDensityGramsPerMl);
     aux.manualResultFactor = prefs.getFloat(factorKey.c_str(), aux.manualResultFactor);
     prefs.end();
   }
   aux.titrantMolarity = constrain(aux.titrantMolarity, 0.0001f, 10.0f);
   aux.blankGrams = constrain(aux.blankGrams, 0.0f, 1000.0f);
+  aux.titrantDensityGramsPerMl = constrain(aux.titrantDensityGramsPerMl, 0.1f, 5.0f);
+  aux.sampleDensityGramsPerMl = constrain(aux.sampleDensityGramsPerMl, 0.1f, 5.0f);
   aux.manualResultFactor = constrain(aux.manualResultFactor, -1000000.0f, 1000000.0f);
   return aux;
 }
@@ -783,6 +793,8 @@ MethodAuxValues loadMethodAux(TitrationMethod method) {
 void applyMethodAux(TitrationSettings &targetSettings, const MethodAuxValues &aux) {
   targetSettings.titrantMolarity = aux.titrantMolarity;
   targetSettings.blankGrams = aux.blankGrams;
+  targetSettings.titrantDensityGramsPerMl = aux.titrantDensityGramsPerMl;
+  targetSettings.sampleDensityGramsPerMl = aux.sampleDensityGramsPerMl;
   targetSettings.manualResultFactor = aux.manualResultFactor;
 }
 
@@ -795,9 +807,13 @@ void saveMethodAux(TitrationMethod method) {
   if (prefs.begin("method_aux", false)) {
     String molarityKey = methodAuxKey(method, "m");
     String blankKey = methodAuxKey(method, "blank");
+    String titrantDensityKey = methodAuxKey(method, "tdens");
+    String sampleDensityKey = methodAuxKey(method, "sdens");
     String factorKey = methodAuxKey(method, "factor");
     prefs.putFloat(molarityKey.c_str(), settings.titrantMolarity);
     prefs.putFloat(blankKey.c_str(), settings.blankGrams);
+    prefs.putFloat(titrantDensityKey.c_str(), settings.titrantDensityGramsPerMl);
+    prefs.putFloat(sampleDensityKey.c_str(), settings.sampleDensityGramsPerMl);
     prefs.putFloat(factorKey.c_str(), settings.manualResultFactor);
     prefs.end();
   }
@@ -889,6 +905,10 @@ void appendMethodPresetJs(String &page, TitrationMethod method, bool addComma) {
   page += resultFormulaValue(preset.resultFormula);
   page += F("',blank_g:'");
   page += String(preset.blankGrams, 2);
+  page += F("',titrant_density:'");
+  page += String(preset.titrantDensityGramsPerMl, 3);
+  page += F("',sample_density:'");
+  page += String(preset.sampleDensityGramsPerMl, 3);
   page += F("',manual_factor:'");
   page += String(preset.manualResultFactor, 4);
   page += F("',control_band:'");
@@ -1723,7 +1743,11 @@ String htmlPage() {
   if (settings.resultFormula == ResultFormula::ManualFactor) page += F(" selected");
   page += F(">Manual factor</option></select></label><label>Blank g<input id='blankInput' name='blank_g' type='number' min='0' max='1000' step='0.01' value='");
   page += String(settings.blankGrams, 2);
-  page += F("'></label></div><div class='row' style='margin-top:10px'><label>Manual factor<input id='manualFactorInput' name='manual_factor' type='number' min='-1000000' max='1000000' step='0.0001' value='");
+  page += F("'></label></div><div class='row' style='margin-top:10px'><label>Titrant density g/mL<input id='titrantDensityInput' name='titrant_density' type='number' min='0.1' max='5' step='0.001' value='");
+  page += String(settings.titrantDensityGramsPerMl, 3);
+  page += F("'></label><label>Sample density g/mL<input id='sampleDensityInput' name='sample_density' type='number' min='0.1' max='5' step='0.001' value='");
+  page += String(settings.sampleDensityGramsPerMl, 3);
+  page += F("'></label><label>Manual factor<input id='manualFactorInput' name='manual_factor' type='number' min='-1000000' max='1000000' step='0.0001' value='");
   page += String(settings.manualResultFactor, 4);
   page += F("'></label><label>Control band<input id='controlBandInput' name='control_band' type='number' min='0.001' max='1000' step='0.001' value='");
   page += String(settings.controlBand, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
@@ -1761,14 +1785,14 @@ String htmlPage() {
   page += F("<div class='card'><h2>Method and Endpoint</h2><p><span class='term'>Method</span> loads a preset group of endpoint, titrant, result formula, and control defaults. Manual keeps custom values.</p><p><span class='term'>Endpoint</span> selects the control signal. Use pH for acid/base endpoint work, or mV for potentiometric endpoints.</p><p><span class='term'>Signal trend</span> tells the controller whether dosing should raise or lower the endpoint signal.</p><p><span class='term'>Target pH / mV</span> is the EP stop value. Only the active endpoint is used for control.</p></div>");
   page += F("<div class='card'><h2>Endpoint Control</h2><p><span class='term'>Control band</span> is the near-target zone. Larger values slow dosing earlier; smaller values dose faster but risk overshoot.</p><p><span class='term'>Stable delta/s</span> is the allowed signal drift while settling. Lower values wait for a flatter response.</p><p><span class='term'>Hold s</span> confirms the endpoint after it is reached. If the signal moves back out, dosing resumes.</p><p><span class='term'>Min / Max settle s</span> controls wait time after each pulse. Slow probes or slow reactions need longer settling.</p><p><span class='term'>Max time s</span> stops a run that takes too long.</p></div>");
   page += F("<div class='card'><h2>Calibration</h2><p><span class='term'>Enter ready</span> stops both pumps before any calibration action.</p><p><span class='term'>Pump flow</span> measures titrant and sample pump delivery in g/s. Recalibrate after tubing, pump head, or liquid changes.</p><p><span class='term'>Scale</span> uses tare for the reactor baseline; scale factor is the grams conversion value.</p><p><span class='term'>pH/mV sensor</span> stores two buffer points and reports slope %, pH7 offset, and status. Reset pH/mV filter only restarts acquisition.</p><p><span class='term'>Titrant standard</span> is configured in Admin through molarity, blank, and result formula.</p></div>");
-  page += F("<div class='card'><h2>Dosing and Results</h2><p><span class='term'>Titrant</span> selects the known solution. Manual mol/L is used only when titrant is Manual.</p><p><span class='term'>Max used g</span> is the safety limit for titrant consumption.</p><p><span class='term'>Sample g</span> is the sample mass delivered by the P1 pump before titration.</p><p><span class='term'>Result formula</span> controls only calculation and display; it does not change pump control.</p><p><span class='term'>Blank g</span> subtracts blank titration consumption before calculating and is saved per Method.</p><p><span class='term'>Manual factor</span> uses result = net titrant g x factor / sample g for custom tests. Manual mol/L, blank, and factor are method auxiliary values.</p></div>");
+  page += F("<div class='card'><h2>Dosing and Results</h2><p><span class='term'>Titrant</span> selects the known solution. Manual mol/L is used only when titrant is Manual.</p><p><span class='term'>Max used g</span> is the safety limit for titrant consumption.</p><p><span class='term'>Sample g</span> is the sample mass delivered by the P1 pump before titration.</p><p><span class='term'>Result formula</span> controls only calculation and display; it does not change pump control.</p><p><span class='term'>Blank g</span> subtracts blank titration consumption before calculating and is saved per Method.</p><p><span class='term'>Density g/mL</span> converts scale mass to mL for molarity and EDTA hardness. Defaults 1.000 for water-like solutions.</p><p><span class='term'>Manual factor</span> uses result = net titrant g x factor / sample g for custom tests. Manual mol/L, blank, densities, and factor are method auxiliary values.</p></div>");
   page += F("<div class='card'><h2>Run Data and EQP</h2><p><span class='term'>Time s</span> is the safer default X axis because data keeps moving even while used g is unchanged.</p><p><span class='term'>Used g</span> is useful for final analysis after enough dose changes have happened.</p><p><span class='term'>Auto EQP</span> marks the largest d(signal)/d(used g) candidate. It is an analysis point, not an automatic stop command.</p><p><span class='term'>Suggest Params</span> estimates control band, stable delta, and settle time from the current curve. It does not apply settings automatically.</p><p>Click the curve to manually correct the EQP point, then export CSV or JSON to save the run on the computer.</p></div>");
   page += F("</div></section>");
   page += F("<script>");
   page += F("function text(id,v){var e=document.getElementById(id);if(e)e.textContent=v}");
   page += F("function html(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v}");
   page += F("var curve=[],curveStart=0,eqpManual=null,lastPlot=[];function num(v){return Number(v||0)}function curveTarget(d){return d.endpoint==='mV'?num(d.target_mv):num(d.target_ph)}");
-  page += F("function recordCurve(d){if(!d.adc_ok)return;var now=Date.now();if(!curveStart)curveStart=now;curve.push({ts:new Date(now).toISOString(),elapsed_s:(now-curveStart)/1000,ph:num(d.ph),mv:num(d.mv),used_g:num(d.used_g),sample_g:num(d.sample_delivered_g),endpoint:d.endpoint,target:curveTarget(d),trend:d.mode,state:d.state,pump:!!d.pump,pulse_ms:num(d.pump_pulse_ms),status:d.status,method:d.method,result_value:num(d.result_value),result_unit:d.result_unit,result_formula:d.result_formula,blank_g:num(d.blank_g),manual_factor:num(d.manual_factor)});if(curve.length>2000)curve.shift();drawCurve()}");
+  page += F("function recordCurve(d){if(!d.adc_ok)return;var now=Date.now();if(!curveStart)curveStart=now;curve.push({ts:new Date(now).toISOString(),elapsed_s:(now-curveStart)/1000,ph:num(d.ph),mv:num(d.mv),used_g:num(d.used_g),sample_g:num(d.sample_delivered_g),endpoint:d.endpoint,target:curveTarget(d),trend:d.mode,state:d.state,pump:!!d.pump,pulse_ms:num(d.pump_pulse_ms),status:d.status,method:d.method,result_value:num(d.result_value),result_unit:d.result_unit,result_formula:d.result_formula,blank_g:num(d.blank_g),titrant_density:num(d.titrant_density),sample_density:num(d.sample_density),manual_factor:num(d.manual_factor)});if(curve.length>2000)curve.shift();drawCurve()}");
   page += F("function dosePoints(){var pts=[];curve.forEach(function(p){if(!isFinite(p.used_g))return;if(pts.length&&Math.abs(p.used_g-pts[pts.length-1].used_g)<0.01){pts[pts.length-1]=p}else pts.push(p)});return pts}");
   page += F("function analyzeEqp(){var pts=dosePoints();if(pts.length<3)return null;var yk=pts[pts.length-1].endpoint==='mV'?'mv':'ph',best=null;for(var i=1;i<pts.length;i++){var dx=pts[i].used_g-pts[i-1].used_g;if(Math.abs(dx)<0.01)continue;var dy=pts[i][yk]-pts[i-1][yk],s=Math.abs(dy/dx);if(!best||s>best.slope){best={mode:'auto',index:i,used_g:pts[i].used_g,elapsed_s:pts[i].elapsed_s,signal:pts[i][yk],ph:pts[i].ph,mv:pts[i].mv,endpoint:pts[i].endpoint,slope:s}}}return best}");
   page += F("function currentEqp(){var a=analyzeEqp();return eqpManual||a}function eqpText(e){if(!e)return 'EQP waits for at least 3 dose-change points.';var v=e.endpoint==='mV'?e.signal.toFixed(0)+' mV':e.signal.toFixed(2)+' pH';return (e.mode==='manual'?'Manual':'Auto')+' EQP: '+e.used_g.toFixed(2)+' g, '+v+', slope '+e.slope.toFixed(e.endpoint==='mV'?1:3)+' '+e.endpoint+'/g'}");
@@ -1803,7 +1827,7 @@ String htmlPage() {
   appendMethodPresetJs(page, TitrationMethod::EdtaHardness, true);
   appendMethodPresetJs(page, TitrationMethod::Manual, false);
   page += F("};");
-  page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m);setv('resultFormulaSelect',p.result_formula);setv('blankInput',p.blank_g);setv('manualFactorInput',p.manual_factor);setv('controlBandInput',p.control_band);setv('stableDeltaInput',p.stable_delta);setv('holdInput',p.hold_s);setv('minSettleInput',p.min_settle_s);setv('maxSettleInput',p.max_settle_s);setv('maxTimeInput',p.max_time_s)});");
+  page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m);setv('resultFormulaSelect',p.result_formula);setv('blankInput',p.blank_g);setv('titrantDensityInput',p.titrant_density);setv('sampleDensityInput',p.sample_density);setv('manualFactorInput',p.manual_factor);setv('controlBandInput',p.control_band);setv('stableDeltaInput',p.stable_delta);setv('holdInput',p.hold_s);setv('minSettleInput',p.min_settle_s);setv('maxSettleInput',p.max_settle_s);setv('maxTimeInput',p.max_time_s)});");
   page += F("var mf=document.getElementById('manualForm');if(mf)mf.addEventListener('submit',async function(e){e.preventDefault();var fd=new FormData(mf);var cmd=e.submitter&&e.submitter.name?e.submitter.value:fd.get('cmd');fd.set('cmd',cmd);fd.set('ajax','1');try{await fetch('/action?'+new URLSearchParams(fd).toString(),{cache:'no-store'});poll()}catch(err){}});");
   page += F("</script></main></body></html>");
   return page;
@@ -1914,6 +1938,16 @@ void handleSet() {
     float nextBlank = constrain(server.arg("blank_g").toFloat(), 0.0f, 1000.0f);
     methodAuxChanged = methodAuxChanged || absoluteFloat(nextBlank - settings.blankGrams) > 0.001f;
     settings.blankGrams = nextBlank;
+  }
+  if (server.hasArg("titrant_density")) {
+    float nextDensity = constrain(server.arg("titrant_density").toFloat(), 0.1f, 5.0f);
+    methodAuxChanged = methodAuxChanged || absoluteFloat(nextDensity - settings.titrantDensityGramsPerMl) > 0.001f;
+    settings.titrantDensityGramsPerMl = nextDensity;
+  }
+  if (server.hasArg("sample_density")) {
+    float nextDensity = constrain(server.arg("sample_density").toFloat(), 0.1f, 5.0f);
+    methodAuxChanged = methodAuxChanged || absoluteFloat(nextDensity - settings.sampleDensityGramsPerMl) > 0.001f;
+    settings.sampleDensityGramsPerMl = nextDensity;
   }
   if (server.hasArg("manual_factor")) {
     float nextFactor = constrain(server.arg("manual_factor").toFloat(), -1000000.0f, 1000000.0f);
@@ -2162,6 +2196,8 @@ void handleJson() {
   json += ",\"result_unit\":\"" + jsonEscape(resultUnit()) + "\"";
   json += ",\"result_formula\":\"" + String(resultFormulaValue(settings.resultFormula)) + "\"";
   json += ",\"blank_g\":" + String(settings.blankGrams, 2);
+  json += ",\"titrant_density\":" + String(settings.titrantDensityGramsPerMl, 3);
+  json += ",\"sample_density\":" + String(settings.sampleDensityGramsPerMl, 3);
   json += ",\"manual_factor\":" + String(settings.manualResultFactor, 4);
   json += ",\"method\":\"" + String(methodValue(currentMethod)) + "\"";
   json += ",\"method_label\":\"" + jsonEscape(methodLabel(currentMethod)) + "\"";

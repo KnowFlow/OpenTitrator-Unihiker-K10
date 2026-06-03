@@ -246,14 +246,21 @@ void setup() {
   expectNear(titrantMolarityForPreset(TitrantPreset::Edta001, 0.2f), 0.01f, 0.001f, "EDTA preset uses 0.01 mol/L");
   expectNear(titrantMolarityForPreset(TitrantPreset::Manual, 0.05f), 0.05f, 0.001f, "manual titrant molarity is used");
   expectNear(computeSampleConcentrationMolar(0.01f, 4.0f, 40.0f), 0.001f, 0.000001f, "sample concentration uses titrant molarity and mass ratio");
+  expectNear(computeSampleConcentrationMolar(0.01f, 4.0f, 40.0f, 0.8f, 1.0f), 0.00125f, 0.000001f, "sample concentration converts titrant mass through density");
   expectNear(netTitrantGrams(4.0f, 0.5f), 3.5f, 0.001f, "blank correction subtracts titrant use");
   expectNear(netTitrantGrams(0.4f, 0.5f), 0.0f, 0.001f, "blank correction clamps negative titrant use");
   expectNear(computeEdtaHardnessCaCO3MgL(0.01f, 2.0f, 50.0f), 40.03476f, 0.001f, "EDTA hardness reports CaCO3 mg/L");
+  expectNear(computeEdtaHardnessCaCO3MgL(0.01f, 2.0f, 50.0f, 0.8f, 1.0f), 50.04345f, 0.001f, "EDTA hardness converts titrant mass through density");
   expectNear(computeManualFactorResult(2.0f, 40.0f, 100.0f), 5.0f, 0.001f, "manual factor result scales net titrant by sample");
 
   settings.resultFormula = ResultFormula::EdtaHardnessCaCO3;
   settings.blankGrams = 0.5f;
+  settings.titrantDensityGramsPerMl = 1.0f;
+  settings.sampleDensityGramsPerMl = 1.0f;
   expectNear(computeTitrationResult(settings, 0.01f, 2.5f, 50.0f), 40.03476f, 0.001f, "result formula applies blank-corrected EDTA hardness");
+  settings.titrantDensityGramsPerMl = 0.8f;
+  expectNear(computeTitrationResult(settings, 0.01f, 2.5f, 50.0f), 50.04345f, 0.001f, "result formula applies density-corrected EDTA hardness");
+  settings.titrantDensityGramsPerMl = 1.0f;
   settings.resultFormula = ResultFormula::ManualFactor;
   settings.manualResultFactor = 100.0f;
   expectNear(computeTitrationResult(settings, 0.01f, 2.5f, 40.0f), 5.0f, 0.001f, "result formula applies manual factor");

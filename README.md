@@ -92,7 +92,9 @@ The project is evolving from a pH titrator into a general potentiometric titrato
 - [x] Web-side curves: browser records `/json` data, saves on the computer, and exports CSV/JSON.
 - [x] Lightweight EQP analysis: compute slope from curve data and mark the equivalence point.
 - [x] Result calculation for acid/base concentration, EDTA hardness, and manual factors.
-- [x] Method-level blank and auxiliary values: store blank, manual molarity, and manual factor per Method.
+- [x] Method-level blank and auxiliary values: store blank, manual molarity, density, and manual factor per Method.
+- [ ] EDTA hardness method refinement: use mV curve slope to stop at an automatic equivalence point instead of a fixed mV target.
+- [ ] Calcium/magnesium two-step hardness workflow with pH-condition guidance.
 - [ ] Advanced features: method workflow, sample series, and reports.
 
 ---
@@ -143,7 +145,7 @@ Join the `K10-pH-Titrator` WiFi, open the AP IP shown on the K10 screen (usually
 |----------|--------|-------------|
 | `/` | GET | Main dashboard |
 | `/json` | GET | Live status JSON |
-| `/set` | GET | Save settings (`mode`, `target`, `max`, `sample`, `titrant`, `titrant_m`, `ssid`, `wifi_password`) |
+| `/set` | GET | Save settings (`mode`, `target`, `max`, `sample`, `titrant`, `titrant_m`, `blank_g`, `titrant_density`, `sample_density`, `ssid`, `wifi_password`) |
 | `/action?cmd=` | GET | `start`, `stop`, `panic`, `tare`, `reset` |
 | `/ota` | POST | Firmware binary upload |
 

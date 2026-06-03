@@ -237,8 +237,9 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 | 电子秤断开 | Error | Scale error |
 
 **结果显示**：
-- 酸碱公式：`C_样品 = C_滴定剂 × (m_滴定剂 - m_空白) / m_样品`，单位 mol/L。
-- EDTA 硬度公式：以 CaCO3 mg/L 显示，近似按水溶液 `1 g = 1 mL` 换算。
+- 酸碱公式：`C_样品 = C_滴定剂 x V_滴定剂 / V_样品`，单位 mol/L。
+- EDTA 硬度公式：`C_EDTA x V_EDTA_mL x 100.0869 x 1000 / V_样品_mL`，以 CaCO3 mg/L 显示。
+- 电子秤测得的质量会通过密度换算为体积：`V_滴定剂_mL = (m_滴定剂 - m_空白) / 滴定剂密度`，`V_样品_mL = m_样品 / 样品密度`。两个密度默认都是 `1.000 g/mL`。
 - 手动公式：`结果 = (m_滴定剂 - m_空白) × 手动系数 / m_样品`，用于自定义实验。
 
 **结束后**：
@@ -306,8 +307,9 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - **Titrant**：0.01 M NaOH、0.01 M HCl、0.01 M EDTA 或 Manual（自定义摩尔浓度）。
 - **Result formula**：酸碱浓度、EDTA 总硬度（mg/L as CaCO3）或手动系数。
 - **Blank g**：空白滴定消耗量，计算结果时从滴定剂用量中扣除。
+- **Titrant density g/mL / Sample density g/mL**：把称重得到的质量换算为 mL，用于摩尔浓度和 EDTA 硬度计算。水样或近似水溶液可保持 `1.000`。
 - **Manual factor**：手动公式使用的换算系数。
-- **辅助值保存**：`Manual mol/L`、`Blank g` 和 `Manual factor` 按当前 Method 单独保存；修改这些值不会把方法切换成 Manual。
+- **辅助值保存**：`Manual mol/L`、`Blank g`、密度和 `Manual factor` 按当前 Method 单独保存；修改这些值不会把方法切换成 Manual。
 - **WiFi**：STA 的 SSID 和密码。保存后自动重启。
 
 ### Guide 参数说明

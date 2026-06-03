@@ -67,6 +67,8 @@ struct TitrationSettings {
   float titrantMolarity = 0.01f;
   ResultFormula resultFormula = ResultFormula::AcidBaseMolar;
   float blankGrams = 0.0f;
+  float titrantDensityGramsPerMl = 1.0f;
+  float sampleDensityGramsPerMl = 1.0f;
   float manualResultFactor = 1.0f;
   float controlBand = 0.30f;
   float stableDelta = 0.005f;
@@ -294,6 +296,8 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       settings.titrantMolarity = 0.01f;
       settings.resultFormula = ResultFormula::AcidBaseMolar;
       settings.blankGrams = 0.0f;
+      settings.titrantDensityGramsPerMl = 1.0f;
+      settings.sampleDensityGramsPerMl = 1.0f;
       settings.manualResultFactor = 1.0f;
       settings.maxConsumedGrams = 20.0f;
       settings.sampleGrams = 20.0f;
@@ -313,6 +317,8 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       settings.titrantMolarity = 0.01f;
       settings.resultFormula = ResultFormula::ManualFactor;
       settings.blankGrams = 0.0f;
+      settings.titrantDensityGramsPerMl = 1.0f;
+      settings.sampleDensityGramsPerMl = 1.0f;
       settings.manualResultFactor = 1.0f;
       settings.maxConsumedGrams = 20.0f;
       settings.sampleGrams = 20.0f;
@@ -332,6 +338,8 @@ inline void applyTitrationMethodPreset(TitrationSettings &settings, TitrationMet
       settings.titrantMolarity = 0.01f;
       settings.resultFormula = ResultFormula::EdtaHardnessCaCO3;
       settings.blankGrams = 0.0f;
+      settings.titrantDensityGramsPerMl = 1.0f;
+      settings.sampleDensityGramsPerMl = 1.0f;
       settings.manualResultFactor = 1.0f;
       settings.maxConsumedGrams = 20.0f;
       settings.sampleGrams = 20.0f;
@@ -354,25 +362,40 @@ inline float netTitrantGrams(float titrantUsedGrams, float blankGrams) {
   return net > 0.0f ? net : 0.0f;
 }
 
+inline float gramsToMilliliters(float grams, float densityGramsPerMl) {
+  if (grams <= 0.0f || densityGramsPerMl <= 0.0f) {
+    return 0.0f;
+  }
+  return grams / densityGramsPerMl;
+}
+
 inline float computeSampleConcentrationMolar(
     float titrantMolarity,
     float titrantUsedGrams,
-    float sampleGrams) {
-  if (titrantMolarity <= 0.0f || titrantUsedGrams <= 0.0f || sampleGrams <= 0.0f) {
+    float sampleGrams,
+    float titrantDensityGramsPerMl = 1.0f,
+    float sampleDensityGramsPerMl = 1.0f) {
+  float titrantMilliliters = gramsToMilliliters(titrantUsedGrams, titrantDensityGramsPerMl);
+  float sampleMilliliters = gramsToMilliliters(sampleGrams, sampleDensityGramsPerMl);
+  if (titrantMolarity <= 0.0f || titrantMilliliters <= 0.0f || sampleMilliliters <= 0.0f) {
     return 0.0f;
   }
-  return titrantMolarity * titrantUsedGrams / sampleGrams;
+  return titrantMolarity * titrantMilliliters / sampleMilliliters;
 }
 
 inline float computeEdtaHardnessCaCO3MgL(
     float edtaMolarity,
     float titrantUsedGrams,
-    float sampleGrams) {
-  if (edtaMolarity <= 0.0f || titrantUsedGrams <= 0.0f || sampleGrams <= 0.0f) {
+    float sampleGrams,
+    float titrantDensityGramsPerMl = 1.0f,
+    float sampleDensityGramsPerMl = 1.0f) {
+  float titrantMilliliters = gramsToMilliliters(titrantUsedGrams, titrantDensityGramsPerMl);
+  float sampleMilliliters = gramsToMilliliters(sampleGrams, sampleDensityGramsPerMl);
+  if (edtaMolarity <= 0.0f || titrantMilliliters <= 0.0f || sampleMilliliters <= 0.0f) {
     return 0.0f;
   }
   constexpr float caco3MilligramsPerMillimole = 100.0869f;
-  return edtaMolarity * titrantUsedGrams * caco3MilligramsPerMillimole * 1000.0f / sampleGrams;
+  return edtaMolarity * titrantMilliliters * caco3MilligramsPerMillimole * 1000.0f / sampleMilliliters;
 }
 
 inline float computeManualFactorResult(
@@ -393,9 +416,19 @@ inline float computeTitrationResult(
   const float netUsed = netTitrantGrams(titrantUsedGrams, settings.blankGrams);
   switch (settings.resultFormula) {
     case ResultFormula::AcidBaseMolar:
-      return computeSampleConcentrationMolar(titrantMolarity, netUsed, sampleGrams);
+      return computeSampleConcentrationMolar(
+          titrantMolarity,
+          netUsed,
+          sampleGrams,
+          settings.titrantDensityGramsPerMl,
+          settings.sampleDensityGramsPerMl);
     case ResultFormula::EdtaHardnessCaCO3:
-      return computeEdtaHardnessCaCO3MgL(titrantMolarity, netUsed, sampleGrams);
+      return computeEdtaHardnessCaCO3MgL(
+          titrantMolarity,
+          netUsed,
+          sampleGrams,
+          settings.titrantDensityGramsPerMl,
+          settings.sampleDensityGramsPerMl);
     case ResultFormula::ManualFactor:
       return computeManualFactorResult(netUsed, sampleGrams, settings.manualResultFactor);
   }

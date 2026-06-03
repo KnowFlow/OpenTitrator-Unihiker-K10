@@ -237,8 +237,9 @@ The titration stops automatically when any of the following occurs:
 | Scale disconnect | Error | Scale error |
 
 **Result display**:
-- Acid/base formula: `C_sample = C_titrant × (mass_titrant - blank_mass) / mass_sample`, in mol/L.
-- EDTA hardness formula: reported as CaCO3 mg/L, approximating aqueous solutions as `1 g = 1 mL`.
+- Acid/base formula: `C_sample = C_titrant x V_titrant / V_sample`, in mol/L.
+- EDTA hardness formula: `C_EDTA x V_EDTA_mL x 100.0869 x 1000 / V_sample_mL`, reported as CaCO3 mg/L.
+- Scale masses are converted to volume by density: `V_titrant_mL = (mass_titrant - blank_mass) / titrant_density`, `V_sample_mL = sample_mass / sample_density`. Both densities default to `1.000 g/mL`.
 - Manual formula: `result = (mass_titrant - blank_mass) × manual_factor / mass_sample` for custom experiments.
 
 **After Done/Error**:
@@ -306,8 +307,9 @@ Open the controller IP in a browser.
 - **Titrant**: 0.01 M NaOH, 0.01 M HCl, 0.01 M EDTA, or Manual with custom molarity.
 - **Result formula**: acid/base concentration, EDTA total hardness (mg/L as CaCO3), or manual factor.
 - **Blank g**: blank titration consumption subtracted from titrant use before calculation.
+- **Titrant density g/mL / Sample density g/mL**: converts scale mass to mL for molarity and EDTA hardness calculations. Leave both at `1.000` for water-like solutions.
 - **Manual factor**: conversion factor used by the manual result formula.
-- **Auxiliary value storage**: `Manual mol/L`, `Blank g`, and `Manual factor` are saved per current Method. Editing them does not switch the Method to Manual.
+- **Auxiliary value storage**: `Manual mol/L`, `Blank g`, densities, and `Manual factor` are saved per current Method. Editing them does not switch the Method to Manual.
 - **WiFi**: STA SSID and password. Saved to flash; controller restarts automatically.
 
 ### Guide Parameter Notes
