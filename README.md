@@ -15,7 +15,7 @@ A standalone pH titration controller for the **UNIHIKER K10** (ESP32-S3). It aut
 | DFRobot KIT0176 scale | I2C | `0x64` | HX711-based, reads reactor weight |
 | Titrant pump | Servo PWM | `P0` | Peristaltic pump (e.g. DFR0523) |
 | Sample pump | Servo PWM | `P1` | Peristaltic pump for sample delivery |
-| Pump power | External 5–6 V | — | Common ground with K10 |
+| Pump power | External 12 V | — | Common ground with K10 |
 
 ### Wiring diagram (conceptual)
 
@@ -27,7 +27,7 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           Scale (0x64)
 │
 ├─ P0  ──► Titrant pump servo signal
 ├─ P1  ──► Sample pump servo signal
-└─ 5V/GND ──► Shared power rail (pumps externally powered)
+└─ 12V/GND ─► Shared power rail (pumps externally powered)
 ```
 
 ---
@@ -51,15 +51,16 @@ Instead of continuous PWM, the controller doses the titrant in **timed pulses** 
 
 The S-shaped curve above illustrates why pulse dosing works: near the steep equivalence point, even a small dose causes a large pH jump. The controller detects this via `dpH/dt` and switches to micro-pulses with longer settle times.
 
-| Zone | pH error | Pulse | Settle | Purpose |
+| Zone | Error threshold | Pulse | Settle | Purpose |
 |------|----------|-------|--------|---------|
 | Steep | `|dpH/dt| > 0.08` | 25 ms | 15 s | Near equivalence point, prevent overshoot |
-| Far | `> 1.0` | 300 ms | 6 s | Conservative approach |
-| Medium | `0.3 – 1.0` | 100 ms | 10 s | Controlled approach |
-| Near | `≤ 0.3` | 40 ms | 15 s | Fine-tuning |
-| Deadband | `≤ 0.05` | — | — | Stop, target reached |
+| Far | `> controlBand × 3` | 450 ms | 5 s | Faster approach while far from endpoint |
+| Medium | `> controlBand` | 150 ms | 8 s | Controlled approach |
+| Near | `> controlBand × 0.33` | 60 ms | 12 s | Fine-tuning |
+| Micro | `≤ controlBand × 0.33` | 25 ms | 15 s | Final micro-dose if still below endpoint |
+| Endpoint | `≤ tolerance` or predictive stop | — | — | Stop, target reached |
 
-A `TitrationDynamics` tracker watches `dpH/dt` and halts immediately if the curve shows overshoot. Each dose decision also carries its own settling interval, so the controller waits long enough for mixing and electrode response before reading pH again.
+A `TitrationDynamics` tracker watches `dpH/dt` and halts immediately if the curve shows overshoot. Each dose decision also carries its own settling interval, clamped by the configured `Min / Max settle s`, so the controller waits long enough for mixing and electrode response before reading pH again. Default pH `controlBand` is `0.30`, so Far/Medium/Near thresholds are approximately `0.90`, `0.30`, and `0.10` pH.
 
 ### Automatic Pump Calibration
 From **SetupReady**, press **B** to enter calibration. The controller runs each pump for exactly 2 seconds, waits 5 seconds after each pump stops, measures the weight change on the scale, computes the flow rate (g/s), and saves it to ESP32 Preferences.

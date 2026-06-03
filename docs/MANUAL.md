@@ -27,7 +27,7 @@
 ## 1. Safety Warnings
 
 - **Chemical safety**: Always wear goggles and gloves when handling acids, bases, or unknown samples.
-- **Electrical safety**: The K10 logic runs at 3.3 V. Pump servos require an external 5–6 V supply. **Never** power the pumps directly from the K10 board.
+- **Electrical safety**: The K10 logic runs at 3.3 V. The peristaltic pumps require an external 12 V supply. **Never** power the pumps directly from the K10 board.
 - **Common ground**: The external pump power supply **must share a ground** with the K10, otherwise the PWM signal will float and pumps may behave erratically.
 - **Emergency stop**: Press and hold **A+B** for ~1.2 seconds at any time to trigger an emergency stop. Both pumps will halt immediately.
 
@@ -40,7 +40,7 @@
 - pH probe (BNC, connect to ADS1115 A0 via adapter)
 - DFRobot KIT0176 I2C scale module + load cell + reactor vessel holder
 - 2× peristaltic pumps with servo plugs (titrant & sample)
-- External 5–6 V power supply for pumps
+- External 12 V power supply for pumps
 - Jumper wires (I2C, power, PWM)
 
 ---
@@ -63,7 +63,7 @@ Plug the pH probe BNC into the ADS1115 A0 channel adapter. The ADS1115 address i
 ### 3.3 Pumps
 - **Titrant pump** signal → `P0`
 - **Sample pump** signal → `P1`
-- Pump power (+5–6 V) comes from the **external supply**, not the K10.
+- Pump power (+12 V) comes from the **external supply**, not the K10.
 
 ### 3.4 Scale
 Place the reactor vessel on the scale platform. The scale module address is `0x64`. Make sure the load cell is pre-loaded slightly so it reads a stable positive value when empty.
@@ -216,7 +216,7 @@ Once pH is stable, the state changes to **Running** and the titration loop begin
 The controller repeatedly cycles through:
 
 1. **Running** — reads pH, decides pulse size using `decideAdaptiveDose`.
-2. **Dosing** — runs the titrant pump for the pulse duration (25–300 ms).
+2. **Dosing** — runs the titrant pump for the pulse duration (25–450 ms).
 3. **Settling** — waits (6–15 s) for mixing and electrode response.
 
 **You can**:
@@ -347,7 +347,7 @@ The controller advertises via mDNS as `k10-ph-titrator`. In the Arduino IDE:
 | Screen shows `ADC NO` | ADS1115 not detected | Check I2C wiring, verify address `0x49` |
 | Screen shows `SCALE NO` | Scale module not detected | Check I2C wiring, verify address `0x64` |
 | `SENSOR_FAULT` on screen | pH probe stuck at 0 or 1023 | Check probe connection, re-calibrate probe |
-| Pump does not run | No external power | Verify 5–6 V supply, common ground |
+| Pump does not run | No external power | Verify 12 V supply, common ground |
 | Pump runs continuously | PWM signal lost | Check servo wire on P0/P1 |
 | Web page won't load | Wrong IP | Use the IP shown on K10 screen |
 | OTA fails | Partition too small | Ensure `partitions.csv` is in the sketch folder |
@@ -378,13 +378,15 @@ if invalid pH → Error
 if mass limit reached → Error
 if already at target (±0.05) → Done
 if overshooting (dpH/dt steep and crossed target) → Done
-if steep slope (|dpH/dt| > 0.08) → 25 ms pulse, 15 s settle
-else if error > 1.0 → 300 ms pulse, 6 s settle
-else if error > 0.3 → 100 ms pulse, 10 s settle
-else → 40 ms pulse, 15 s settle
+if still drifting toward target inside predictive stop margin → Done
+if steep slope (|dpH/dt| > endpoint steep limit) → 25 ms pulse, 15 s settle
+else if error > controlBand × 3 → 450 ms pulse, 5 s settle
+else if error > controlBand → 150 ms pulse, 8 s settle
+else if error > controlBand × 0.33 → 60 ms pulse, 12 s settle
+else → 25 ms pulse, 15 s settle
 ```
 
-The controller uses the settle interval returned by each dose decision before returning to **Running**. This slower cadence gives the reactor and pH electrode enough time to respond, reducing overshoot near the endpoint.
+The controller uses the settle interval returned by each dose decision before returning to **Running**. The interval is clamped by the configured `Min / Max settle s`. This slower cadence gives the reactor and pH electrode enough time to respond, reducing overshoot near the endpoint.
 
 ### 11.4 Calibration Math
 

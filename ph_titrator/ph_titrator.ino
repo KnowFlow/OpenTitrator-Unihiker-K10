@@ -1616,7 +1616,7 @@ String htmlPage() {
   page += htmlEscape(staIpAddress);
   page += F(" / OTA host ");
   page += htmlEscape(String(OTA_HOSTNAME));
-  page += F("</p><p class='tiny'><a class='ghost' href='/json'>JSON status</a></p></div>");
+  page += F("</p><p class='tiny'><a class='ghost' href='/json'>JSON status</a> / Source <a class='ghost' href='https://github.com/KnowFlow/OpenTitrator/tree/codex/ph-titrator'>KnowFlow/OpenTitrator</a> / <a class='ghost' href='https://github.com/rockets-cn/k10-ph-titrator/tree/codex/ph-titrator'>rockets-cn mirror</a></p></div>");
   page += F("<div class='card full'><h2>Run Data</h2><div class='chartbar'>");
   page += F("<label>X axis<select id='chartX'><option value='time'>Time s</option><option value='used'>Used g</option></select></label>");
   page += F("<label>Y axis<select id='chartY'><option value='auto'>Endpoint</option><option value='ph'>pH</option><option value='mv'>mV</option></select></label>");
