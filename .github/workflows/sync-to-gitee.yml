@@ -43,7 +43,7 @@ jobs:
           git config --global core.sshCommand "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no"
 
       - name: Push to Gitee
-        timeout-minutes: 2
+        timeout-minutes: 10
         run: |
           git remote add gitee git@gitee.com:rocketscn/k10-ph-titrator.git 2>/dev/null || git remote set-url gitee git@gitee.com:rocketscn/k10-ph-titrator.git
           git remote -v
