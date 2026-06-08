@@ -23,30 +23,30 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          # 正确写入私钥（避免 echo 处理换行符的问题）
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          # 验证密钥格式
-          echo "=== Key info ==="
-          ssh-keygen -l -f ~/.ssh/id_ed25519
-          echo "=== Key fingerprint (md5) ==="
-          ssh-keygen -lf ~/.ssh/id_ed25519 -E md5
-          # 添加 Gitee 到 known_hosts
           ssh-keyscan -t ed25519 gitee.com >> ~/.ssh/known_hosts
-
-      - name: Test SSH connection to Gitee
-        run: |
-          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=10 git@gitee.com || true
+          ssh-keygen -l -f ~/.ssh/id_ed25519
 
       - name: Configure Git SSH
         run: |
           git config --global core.sshCommand "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no"
 
-      - name: Push to Gitee
-        timeout-minutes: 10
+      - name: Ensure proper branch and push to Gitee
+        timeout-minutes: 5
         run: |
+          echo "=== Current state ==="
+          git status
+          git branch -a
+          git log --oneline -1
+          
+          echo "=== Setup remote ==="
           git remote add gitee git@gitee.com:rocketscn/k10-ph-titrator.git 2>/dev/null || git remote set-url gitee git@gitee.com:rocketscn/k10-ph-titrator.git
-          git remote -v
-          echo "=== Starting push ==="
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -vvv" git push gitee HEAD:codex/ph-titrator --force
+          
+          echo "=== Create local branch ==="
+          git checkout -B codex/ph-titrator
+          
+          echo "=== Push to Gitee (with verbose) ==="
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" git push gitee codex/ph-titrator --verbose
+          
           echo "=== Push done ==="
