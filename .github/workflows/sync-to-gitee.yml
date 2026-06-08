@@ -18,13 +18,30 @@ jobs:
           fetch-depth: 0
 
       - name: Setup SSH key for Gitee
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.GITEE_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.GITEE_SSH_KEY }}" > ~/.ssh/id_rsa
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H gitee.com >> ~/.ssh/known_hosts
+          echo "SSH key setup done"
+
+      - name: Test SSH connection to Gitee
+        run: |
+          echo "Testing SSH connection..."
+          ssh -T git@gitee.com || true
+          echo "SSH test done"
 
       - name: Push to Gitee
+        timeout-minutes: 2
         run: |
-          git remote add gitee git@gitee.com:rocketscn/k10-ph-titrator.git || git remote set-url gitee git@gitee.com:rocketscn/k10-ph-titrator.git
+          echo "Current branch: $(git branch --show-current)"
+          echo "Git log:"
+          git log --oneline -3
+          git remote add gitee git@gitee.com:rocketscn/k10-ph-titrator.git 2>/dev/null || git remote set-url gitee git@gitee.com:rocketscn/k10-ph-titrator.git
+          echo "Remotes:"
+          git remote -v
+          echo "Starting push..."
           git push gitee HEAD:codex/ph-titrator --force
+          echo "Push done"
