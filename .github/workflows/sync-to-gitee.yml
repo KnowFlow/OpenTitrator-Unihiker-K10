@@ -17,10 +17,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup SSH key for Gitee
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.GITEE_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H gitee.com >> ~/.ssh/known_hosts
+
       - name: Push to Gitee
-        uses: wearerequired/git-mirror-action@master
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.GITEE_SSH_KEY }}
-        with:
-          source-repo: "https://github.com/rockets-cn/k10-ph-titrator.git"
-          destination-repo: "git@gitee.com:rocketscn/k10-ph-titrator.git"
+        run: |
+          git remote add gitee git@gitee.com:rocketscn/k10-ph-titrator.git || git remote set-url gitee git@gitee.com:rocketscn/k10-ph-titrator.git
+          git push gitee HEAD:codex/ph-titrator --force
