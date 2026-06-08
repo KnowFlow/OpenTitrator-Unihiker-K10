@@ -22,20 +22,31 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.GITEE_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 700 ~/.ssh
+          # 正确写入私钥（避免 echo 处理换行符的问题）
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H gitee.com >> ~/.ssh/known_hosts
-          echo "SSH key saved"
+          # 验证密钥格式
+          echo "=== Key info ==="
+          ssh-keygen -l -f ~/.ssh/id_ed25519
+          echo "=== Key fingerprint (md5) ==="
+          ssh-keygen -lf ~/.ssh/id_ed25519 -E md5
+          # 添加 Gitee 到 known_hosts
+          ssh-keyscan -t ed25519 gitee.com >> ~/.ssh/known_hosts
 
       - name: Test SSH connection to Gitee
         run: |
-          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=~/.ssh/known_hosts git@gitee.com || true
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=10 git@gitee.com || true
+
+      - name: Configure Git SSH
+        run: |
+          git config --global core.sshCommand "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no"
 
       - name: Push to Gitee
-        env:
-          GIT_SSH_COMMAND: "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=~/.ssh/known_hosts"
         timeout-minutes: 2
         run: |
           git remote add gitee git@gitee.com:rocketscn/k10-ph-titrator.git 2>/dev/null || git remote set-url gitee git@gitee.com:rocketscn/k10-ph-titrator.git
           git remote -v
-          git push gitee HEAD:codex/ph-titrator --force
+          echo "=== Starting push ==="
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -vvv" git push gitee HEAD:codex/ph-titrator --force
+          echo "=== Push done ==="
