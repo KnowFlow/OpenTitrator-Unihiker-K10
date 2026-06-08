@@ -26,27 +26,19 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -t ed25519 gitee.com >> ~/.ssh/known_hosts
-          ssh-keygen -l -f ~/.ssh/id_ed25519
 
-      - name: Configure Git SSH
+      - name: Test SSH connection to Gitee
         run: |
-          git config --global core.sshCommand "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no"
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=10 -T git@gitee.com || true
 
-      - name: Ensure proper branch and push to Gitee
+      - name: Configure Git and push to Gitee
         timeout-minutes: 5
         run: |
-          echo "=== Current state ==="
-          git status
-          git branch -a
-          git log --oneline -1
-          
-          echo "=== Setup remote ==="
+          git config --global protocol.version 0
+          git config --global push.negotiate false
+          git config --global core.sshCommand "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no"
           git remote add gitee git@gitee.com:rocketscn/k10-ph-titrator.git 2>/dev/null || git remote set-url gitee git@gitee.com:rocketscn/k10-ph-titrator.git
-          
-          echo "=== Create local branch ==="
           git checkout -B codex/ph-titrator
-          
-          echo "=== Push to Gitee (with verbose) ==="
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" git push gitee codex/ph-titrator --verbose
-          
+          echo "=== Pushing to Gitee (protocol v0, no-thin) ==="
+          git push --no-thin --verbose gitee codex/ph-titrator
           echo "=== Push done ==="
