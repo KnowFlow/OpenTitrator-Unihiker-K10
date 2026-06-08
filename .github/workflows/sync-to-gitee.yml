@@ -1,0 +1,26 @@
+name: Sync to Gitee
+
+on:
+  push:
+    branches: [master, main, codex/ph-titrator]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Gitee
+        uses: wearerequired/git-mirror-action@master
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.GITEE_SSH_KEY }}
+        with:
+          source-repo: "https://github.com/rockets-cn/k10-ph-titrator.git"
+          destination-repo: "git@gitee.com:rocketscn/k10-ph-titrator.git"
