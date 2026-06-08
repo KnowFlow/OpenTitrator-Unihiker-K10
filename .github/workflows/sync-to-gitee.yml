@@ -12,15 +12,26 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Push to Gitee
-        uses: wearerequired/git-mirror-action@master
+      - name: Setup SSH key for Gitee
         env:
           SSH_PRIVATE_KEY: ${{ secrets.GITEE_SSH_KEY }}
-        with:
-          source-repo: "https://github.com/rockets-cn/k10-ph-titrator.git"
-          destination-repo: "git@gitee.com:rocketscn/k10-ph-titrator.git"
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 gitee.com >> ~/.ssh/known_hosts
+
+      - name: Clone bare and push to Gitee
+        timeout-minutes: 10
+        run: |
+          cd /tmp
+          echo "=== Cloning bare repo from GitHub ==="
+          git clone --bare --progress https://github.com/rockets-cn/k10-ph-titrator.git k10-ph-titrator.git
+          cd k10-ph-titrator.git
+          echo "=== Adding Gitee remote ==="
+          git remote add gitee git@gitee.com:rocketscn/k10-ph-titrator.git
+          git config --local core.sshCommand "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no"
+          echo "=== Pushing to Gitee ==="
+          git push --progress --mirror gitee
+          echo "=== Done ==="
