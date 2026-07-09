@@ -288,10 +288,14 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 ### Calibration tab
 - **Enter ready**：停止两路泵并进入可校准的 READY 状态。
 - **Calibrate pumps**：按“滴定泵 2 秒 → 静置 5 秒 → 样品泵 2 秒 → 静置 5 秒”的顺序测量两路泵流量。
+- **泵 PWM us**：每个泵保存的运行速度。`1000us` 为原来的较快设置；越接近 `1500us` 越接近停泵中位，速度越慢。修改后请重新执行泵流量校准。
 - **Tare scale**：将当前反应器重量作为电子秤基准。
 - **Reset pH/mV filter**：重启 pH/mV 采样滤波，用于更换探头或缓冲液后重新稳定读数；它不会改写保存的两点校准。
 - **pH/mV Sensor**：填写两种缓冲液的 pH、探头 mV 和 ADS 输入 mV。页面会显示斜率百分比、pH 7 偏移和校准状态，便于判断探头是否需要重新校准。
 - **Titrant Standard**：显示当前滴定液和结果公式。滴定液摩尔浓度、空白量和公式在 **Admin** tab 设置；后续可扩展为用基准物质反标定滴定液系数。
+
+### Manual tab
+- 手动运行泵时可以临时指定 P0/P1 PWM，用于单独测试速度。这些临时值不会改变已保存默认值；确认合适后在 Calibration 页保存。
 
 ### 设置项
 - **Method**：pH endpoint、mV endpoint、EDTA hardness 或 Manual method。切换预设时页面会立即填入对应参数。

@@ -288,10 +288,14 @@ Open the controller IP in a browser.
 ### Calibration Tab
 - **Enter ready**: stops both pumps and enters the READY state for calibration.
 - **Calibrate pumps**: measures both pump flow rates in the sequence "titrant pump 2 s -> wait 5 s -> sample pump 2 s -> wait 5 s".
+- **Pump PWM us**: saved speed for each pump. `1000us` is the original fast setting; values closer to `1500us` slow the pump toward the stop midpoint. After changing this value, run pump calibration again.
 - **Tare scale**: uses the current reactor weight as the scale baseline.
 - **Reset pH/mV filter**: restarts pH/mV acquisition filtering after changing probe or buffer solution. It does not overwrite the saved two-point calibration.
 - **pH/mV Sensor**: enter two buffer pH values with their probe mV and ADS input mV. The page displays slope percentage, pH 7 offset, and calibration status to help decide whether the probe needs recalibration.
 - **Titrant Standard**: shows the current titrant and result formula. Titrant molarity, blank, and formula are configured in the **Admin** tab; a future standardization step can calculate titrant factor from a primary standard.
+
+### Manual Tab
+- Manual pump runs can use temporary P0/P1 PWM values for speed testing. These temporary values do not change the saved defaults; save PWM values in Calibration when the tested speed is suitable.
 
 ### Settings
 - **Method**: pH endpoint, mV endpoint, EDTA hardness, or Manual method. Changing a preset immediately fills the related form values.

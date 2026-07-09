@@ -31,8 +31,10 @@ const uint32_t RESTART_DELAY_MS = 1200;
 const int TITRANT_PUMP_PIN = P0;
 const int SAMPLE_PUMP_PIN = P1;
 const int PUMP_STOP_US = 1500;
-const int TITRANT_PUMP_RUN_US = 1000;
-const int SAMPLE_PUMP_RUN_US = 1000;
+const int PUMP_MIN_RUN_US = 1000;
+const int PUMP_MAX_RUN_US = 1500;
+const int TITRANT_PUMP_DEFAULT_RUN_US = 1000;
+const int SAMPLE_PUMP_DEFAULT_RUN_US = 1000;
 const uint32_t SAMPLE_INTERVAL_MS = 2000;
 const uint32_t SCALE_SAMPLE_FILL_INTERVAL_MS = 250;
 const uint32_t SCALE_SAMPLE_INTERVAL_MS = 500;
@@ -484,14 +486,26 @@ private:
   }
 };
 
+int constrainPumpRunUs(int value) {
+  return constrain(value, PUMP_MIN_RUN_US, PUMP_MAX_RUN_US);
+}
+
 class PumpController {
 public:
   void begin(Servo &servoRef, int pin, int runPulseUs) {
     servo = &servoRef;
-    runUs = runPulseUs;
     servo->setPeriodHertz(50);
     servo->attach(pin, 500, 2500);
+    setRunPulseUs(runPulseUs);
     stop();
+  }
+
+  void setRunPulseUs(int pulseUs) {
+    runUs = constrainPumpRunUs(pulseUs);
+  }
+
+  int runPulseUs() const {
+    return runUs;
   }
 
   void stop() {
@@ -506,7 +520,7 @@ public:
 
   void runForMsAtUs(uint16_t ms, int pulseUs) {
     runUntilMs = millis() + ms;
-    writeRun(pulseUs);
+    writeRun(constrainPumpRunUs(pulseUs));
   }
 
   void runContinuous() {
@@ -541,7 +555,7 @@ private:
 
   void writeRun(int pulseUs) {
     if (servo != nullptr) {
-      servo->writeMicroseconds(pulseUs);
+      servo->writeMicroseconds(constrainPumpRunUs(pulseUs));
     }
   }
 };
@@ -565,6 +579,8 @@ TitrationDynamics phDynamics;
 EqpTracker eqpTracker;
 float titrantPumpFlowRateGps = 0.0f;
 float samplePumpFlowRateGps = 0.0f;
+int titrantPumpRunUs = TITRANT_PUMP_DEFAULT_RUN_US;
+int samplePumpRunUs = SAMPLE_PUMP_DEFAULT_RUN_US;
 float initialBottleWeight = 0.0f;
 float sampleStartWeight = 0.0f;
 float sampleDeliveredGrams = 0.0f;
@@ -606,6 +622,11 @@ struct MethodAuxValues {
   float sampleDensityGramsPerMl = 1.0f;
   float manualResultFactor = 1.0f;
 };
+
+MethodAuxValues defaultMethodAux(TitrationMethod method);
+MethodAuxValues loadMethodAux(TitrationMethod method);
+void applyMethodAux(TitrationSettings &targetSettings, const MethodAuxValues &aux);
+void loadMethodAuxIntoSettings(TitrationMethod method);
 
 bool devicePresent(uint8_t address) {
   Wire.beginTransmission(address);
@@ -1934,7 +1955,11 @@ String htmlPage() {
   page += String(titrantPumpFlowRateGps, 3);
   page += F("'></label><label>Sample pump g/s<input name='sample_gps' type='number' min='0' max='100' step='0.001' value='");
   page += String(samplePumpFlowRateGps, 3);
-  page += F("'></label></div><p class='tiny'>Measures each pump independently by mass. Re-run after tubing, pump head, liquid, or viscosity changes.</p></div>");
+  page += F("'></label><label>Titrant pump PWM us<input name='titrant_run_us' type='number' min='1000' max='1500' step='1' value='");
+  page += String(titrantPumpRunUs);
+  page += F("'></label><label>Sample pump PWM us<input name='sample_run_us' type='number' min='1000' max='1500' step='1' value='");
+  page += String(samplePumpRunUs);
+  page += F("'></label></div><p class='tiny'>Measures each pump independently by mass. PWM: 1000 fast, 1500 stop/slow limit. Re-run calibration after changing tubing, pump head, liquid, viscosity, or PWM speed.</p></div>");
   page += F("<div class='card'><h2>Scale</h2><div class='row'><label>Scale factor<input name='scale_factor' type='number' min='1' max='100000' step='0.1' value='");
   page += String(scaleSensor.calibrationFactor(), 1);
   page += F("'></label></div><p class='tiny'>Tare scale resets the reactor baseline. Scale factor is the HX711 conversion value used for grams.</p></div>");
@@ -1972,7 +1997,11 @@ String htmlPage() {
   page += F(" g.</p><p class='tiny'>Use Admin for known titrant molarity, blank, and formula. A future standardization step can calculate titrant factor from a primary standard.</p></div>");
   page += F("<div class='card'><h2>Save</h2><p class='tiny'>Saving stores pump flow, scale factor, and pH/mV two-point calibration in flash. WiFi and method settings are kept separate.</p><button class='primary' type='submit'>Save calibration</button></div></form></section>");
 
-  page += F("<section id='tab-manual' class='panel'><div class='card full'><h2>Manual Operation</h2><form id='manualForm' action='/action' method='get' class='row'><label class='mini'>Run seconds<input name='sec' type='number' min='0.1' max='30' step='0.1' value='1.0'></label><button class='btn' name='cmd' value='manual_titrant' type='submit'>Run titrant pump</button><button class='btn' name='cmd' value='manual_sample' type='submit'>Run sample pump</button><button class='btn danger' name='cmd' value='manual_stop' type='submit'>Stop pumps</button></form><p class='tiny'>Manual pump actions are blocked while titration or calibration is active. Use seconds here for priming tubing and experiment preparation.</p></div></section>");
+  page += F("<section id='tab-manual' class='panel'><div class='card full'><h2>Manual Operation</h2><form id='manualForm' action='/action' method='get' class='row'><label class='mini'>Run seconds<input name='sec' type='number' min='0.1' max='30' step='0.1' value='1.0'></label><label class='mini'>Titrant PWM us<input name='titrant_us' type='number' min='1000' max='1500' step='1' value='");
+  page += String(titrantPumpRunUs);
+  page += F("'></label><label class='mini'>Sample PWM us<input name='sample_us' type='number' min='1000' max='1500' step='1' value='");
+  page += String(samplePumpRunUs);
+  page += F("'></label><button class='btn' name='cmd' value='manual_titrant' type='submit'>Run titrant pump</button><button class='btn' name='cmd' value='manual_sample' type='submit'>Run sample pump</button><button class='btn danger' name='cmd' value='manual_stop' type='submit'>Stop pumps</button></form><p class='tiny'>Manual pump actions are blocked while titration or calibration is active. PWM: 1000 fast, 1500 stop/slow limit. Use seconds and PWM here for priming tubing and speed tests.</p></div></section>");
 
   page += F("<section id='tab-admin' class='panel'><div class='split'><div><form action='/set' method='get' class='card'><h2>Settings</h2><div class='row'>");
   page += F("<label>Method<select id='methodSelect' name='method'><option value='ph_ep'");
@@ -2299,6 +2328,16 @@ void handleSet() {
     samplePumpFlowRateGps = constrain(server.arg("sample_gps").toFloat(), 0.0f, 100.0f);
     calibrationChanged = true;
   }
+  if (server.hasArg("titrant_run_us")) {
+    titrantPumpRunUs = constrainPumpRunUs(server.arg("titrant_run_us").toInt());
+    pump.setRunPulseUs(titrantPumpRunUs);
+    calibrationChanged = true;
+  }
+  if (server.hasArg("sample_run_us")) {
+    samplePumpRunUs = constrainPumpRunUs(server.arg("sample_run_us").toInt());
+    samplePump.setRunPulseUs(samplePumpRunUs);
+    calibrationChanged = true;
+  }
   if (server.hasArg("scale_factor")) {
     scaleSensor.setCalibrationFactor(constrain(server.arg("scale_factor").toFloat(), 1.0f, 100000.0f));
     calibrationChanged = true;
@@ -2371,8 +2410,20 @@ void handleAction() {
   float manualSeconds = server.hasArg("sec") ? server.arg("sec").toFloat() : (server.arg("ms").toFloat() / 1000.0f);
   manualSeconds = constrain(manualSeconds, 0.1f, 30.0f);
   uint16_t manualMs = (uint16_t)(manualSeconds * 1000.0f + 0.5f);
-  int manualUs = server.hasArg("us") ? server.arg("us").toInt() : TITRANT_PUMP_RUN_US;
-  manualUs = constrain(manualUs, 500, 2500);
+  int manualTitrantUs = titrantPumpRunUs;
+  int manualSampleUs = samplePumpRunUs;
+  if (server.hasArg("titrant_us")) {
+    manualTitrantUs = server.arg("titrant_us").toInt();
+  } else if (server.hasArg("us")) {
+    manualTitrantUs = server.arg("us").toInt();
+  }
+  if (server.hasArg("sample_us")) {
+    manualSampleUs = server.arg("sample_us").toInt();
+  } else if (server.hasArg("us")) {
+    manualSampleUs = server.arg("us").toInt();
+  }
+  manualTitrantUs = constrainPumpRunUs(manualTitrantUs);
+  manualSampleUs = constrainPumpRunUs(manualSampleUs);
   const char *returnTab = "run";
   if (cmd == "start") {
     if (state == RunState::Paused) {
@@ -2433,8 +2484,8 @@ void handleAction() {
     if (!isActiveState() && state != RunState::Calibrating) {
       samplePump.stop();
       activePulseMs = manualMs;
-      pump.runForMsAtUs(manualMs, manualUs);
-      statusLine = String("Manual titrant ") + String(manualSeconds, 1) + "s @ " + String(manualUs) + "us";
+      pump.runForMsAtUs(manualMs, manualTitrantUs);
+      statusLine = String("Manual titrant ") + String(manualSeconds, 1) + "s @ " + String(manualTitrantUs) + "us";
       displayDirty = true;
     }
   } else if (cmd == "manual_sample") {
@@ -2442,8 +2493,8 @@ void handleAction() {
     if (!isActiveState() && state != RunState::Calibrating) {
       pump.stop();
       activePulseMs = 0;
-      samplePump.runForMs(manualMs);
-      statusLine = String("Manual sample ") + String(manualSeconds, 1) + "s";
+      samplePump.runForMsAtUs(manualMs, manualSampleUs);
+      statusLine = String("Manual sample ") + String(manualSeconds, 1) + "s @ " + String(manualSampleUs) + "us";
       displayDirty = true;
     }
   } else if (cmd == "manual_stop") {
@@ -2527,6 +2578,8 @@ void handleJson() {
   json += ",\"ota\":" + String(otaReady ? "true" : "false");
   json += ",\"titrant_gps\":" + String(titrantPumpFlowRateGps, 4);
   json += ",\"sample_gps\":" + String(samplePumpFlowRateGps, 4);
+  json += ",\"titrant_run_us\":" + String(titrantPumpRunUs);
+  json += ",\"sample_run_us\":" + String(samplePumpRunUs);
   json += ",\"scale_factor\":" + String(scaleSensor.calibrationFactor(), 2);
   json += ",\"scale_filtered\":" + String(lastScale.filtered ? "true" : "false");
   json += ",\"scale_rejected\":" + String(lastScale.rejected ? "true" : "false");
@@ -2725,6 +2778,8 @@ void saveCalibration() {
   if (prefs.begin("cal", false)) {
     prefs.putFloat("titrant_gps", titrantPumpFlowRateGps);
     prefs.putFloat("sample_gps", samplePumpFlowRateGps);
+    prefs.putInt("titrant_us", titrantPumpRunUs);
+    prefs.putInt("sample_us", samplePumpRunUs);
     prefs.putFloat("scale_factor", scaleSensor.calibrationFactor());
     prefs.putFloat("low_ads_mv", phCalibration.lowAdsMillivolts);
     prefs.putFloat("low_probe_mv", phCalibration.lowProbeMillivolts);
@@ -2741,6 +2796,8 @@ void loadCalibration() {
   if (prefs.begin("cal", true)) {
     titrantPumpFlowRateGps = prefs.getFloat("titrant_gps", 0.0f);
     samplePumpFlowRateGps = prefs.getFloat("sample_gps", 0.0f);
+    titrantPumpRunUs = constrainPumpRunUs(prefs.getInt("titrant_us", TITRANT_PUMP_DEFAULT_RUN_US));
+    samplePumpRunUs = constrainPumpRunUs(prefs.getInt("sample_us", SAMPLE_PUMP_DEFAULT_RUN_US));
     scaleSensor.setCalibrationFactor(prefs.getFloat("scale_factor", scaleSensor.calibrationFactor()));
     phCalibration.lowAdsMillivolts = prefs.getFloat("low_ads_mv", phCalibration.lowAdsMillivolts);
     phCalibration.lowProbeMillivolts = prefs.getFloat("low_probe_mv", phCalibration.lowProbeMillivolts);
@@ -2815,13 +2872,15 @@ void setup() {
   k10.setScreenBackground(COLOR_BG);
   Wire.begin();
 
-  pump.begin(titrantPumpServo, TITRANT_PUMP_PIN, TITRANT_PUMP_RUN_US);
-  samplePump.begin(samplePumpServo, SAMPLE_PUMP_PIN, SAMPLE_PUMP_RUN_US);
+  pump.begin(titrantPumpServo, TITRANT_PUMP_PIN, titrantPumpRunUs);
+  samplePump.begin(samplePumpServo, SAMPLE_PUMP_PIN, samplePumpRunUs);
 
   phReady = phSensor.begin();
   scaleReady = scaleSensor.begin();
 
   loadCalibration();
+  pump.setRunPulseUs(titrantPumpRunUs);
+  samplePump.setRunPulseUs(samplePumpRunUs);
   loadSelectedMethod();
 
   if (!phReady || !scaleReady) {
