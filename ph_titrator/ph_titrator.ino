@@ -741,6 +741,9 @@ bool devicePresent(uint8_t address) {
 }
 
 void setState(RunState next, const String &status) {
+  if (next == RunState::Error) {
+    endpointHold.reset();
+  }
   state = next;
   statusLine = status;
   stateStartedMs = millis();
@@ -1370,7 +1373,6 @@ bool startTitration() {
   resultValue = 0.0f;
   refreshStoichPredoseTarget();
   runStartedMs = 0;
-  endpointHold.reset();
   phReady = false;
   stopReason = TitrationStopReason::None;
   runStartedMs = millis();
@@ -1584,6 +1586,14 @@ ButtonEvent readButtons() {
 
 void handleButton(ButtonEvent event) {
   if (event == ButtonEvent::None) {
+    return;
+  }
+
+  if (httpOtaSafetyLock) {
+    if (event == ButtonEvent::ABLong) {
+      pump.stop();
+      samplePump.stop();
+    }
     return;
   }
 
@@ -2361,6 +2371,13 @@ void handleRoot() {
 }
 
 void handleSet() {
+  if (httpOtaSafetyLock) {
+    statusLine = httpOtaInProgress ? "OTA in progress" : "OTA failed: reset required";
+    displayDirty = true;
+    redirectHomeTab("admin");
+    return;
+  }
+
   bool wifiChanged = false;
   bool endpointChanged = false;
   bool methodRequested = false;
@@ -2597,6 +2614,9 @@ void handleSet() {
   if (methodAuxChanged) {
     saveMethodAux(currentMethod);
   }
+  if (methodChanged || methodFieldChanged || endpointChanged) {
+    endpointHold.reset();
+  }
   if (endpointChanged) {
     phDynamics.reset();
     eqpTracker.reset();
@@ -2615,7 +2635,7 @@ void handleAction() {
   updatePumpTimeouts();
   String cmd = server.arg("cmd");
   if (httpOtaSafetyLock) {
-    if (cmd == "reset" && !httpOtaInProgress) {
+    if (cmd == "reset" && !httpOtaInProgress && !httpOtaSucceeded) {
       resetFromHttpOtaFailure();
     } else if (cmd == "panic") {
       pump.stop();
