@@ -3,6 +3,7 @@
 .arduino-build/
 .arduino-output/
 .pio/
+.worktrees/
 *.elf
 *.bin
 *.hex
