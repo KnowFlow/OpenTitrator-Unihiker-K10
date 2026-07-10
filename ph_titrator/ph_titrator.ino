@@ -18,7 +18,7 @@ Preferences preferences;
 const uint8_t SCREEN_DIR = 2;
 const uint8_t ADS1115_ADDR = 0x49;
 const uint8_t SCALE_ADDR = 0x64;
-const uint8_t PH_ADC_CHANNEL = 0;
+const uint8_t PH_ADC_CHANNEL = 1;
 const float DEFAULT_TEMPERATURE_C = 25.0f;
 const uint32_t ADC_CONVERSION_MS = 12;
 const uint32_t SCALE_SETTLE_MS = 60;
@@ -35,6 +35,15 @@ const int PUMP_MIN_RUN_US = 1000;
 const int PUMP_MAX_RUN_US = 1500;
 const int TITRANT_PUMP_DEFAULT_RUN_US = 1000;
 const int SAMPLE_PUMP_DEFAULT_RUN_US = 1000;
+const int TITRANT_DOSE_MIN_PERCENT = 5;
+const int TITRANT_DOSE_MAX_PERCENT = 100;
+const int TITRANT_DOSE_DEFAULT_PERCENT = 100;
+const uint16_t TITRANT_MIN_PULSE_MS = 5;
+const uint16_t TITRANT_BURST_ON_DEFAULT_MS = 5;
+const uint16_t TITRANT_BURST_OFF_DEFAULT_MS = 100;
+const uint16_t TITRANT_BURST_ON_MIN_MS = 1;
+const uint16_t TITRANT_BURST_ON_MAX_MS = 1000;
+const uint16_t TITRANT_BURST_OFF_MAX_MS = 5000;
 const uint32_t SAMPLE_INTERVAL_MS = 2000;
 const uint32_t SCALE_SAMPLE_FILL_INTERVAL_MS = 250;
 const uint32_t SCALE_SAMPLE_INTERVAL_MS = 500;
@@ -490,6 +499,32 @@ int constrainPumpRunUs(int value) {
   return constrain(value, PUMP_MIN_RUN_US, PUMP_MAX_RUN_US);
 }
 
+int constrainTitrantDosePercent(int value) {
+  return constrain(value, TITRANT_DOSE_MIN_PERCENT, TITRANT_DOSE_MAX_PERCENT);
+}
+
+uint16_t constrainTitrantBurstOnMs(int value) {
+  return (uint16_t)constrain(value, TITRANT_BURST_ON_MIN_MS, TITRANT_BURST_ON_MAX_MS);
+}
+
+uint16_t constrainTitrantBurstOffMs(int value) {
+  return (uint16_t)constrain(value, 0, TITRANT_BURST_OFF_MAX_MS);
+}
+
+uint16_t scaleTitrantPulseMs(uint16_t pulseMs, int percent) {
+  if (pulseMs == 0) {
+    return 0;
+  }
+  uint32_t scaled = ((uint32_t)pulseMs * (uint32_t)constrainTitrantDosePercent(percent) + 50UL) / 100UL;
+  if (scaled < TITRANT_MIN_PULSE_MS) {
+    scaled = TITRANT_MIN_PULSE_MS;
+  }
+  if (scaled > UINT16_MAX) {
+    scaled = UINT16_MAX;
+  }
+  return (uint16_t)scaled;
+}
+
 class PumpController {
 public:
   void begin(Servo &servoRef, int pin, int runPulseUs) {
@@ -510,27 +545,54 @@ public:
 
   void stop() {
     runUntilMs = 0;
+    burstMode = false;
+    outputRunning = false;
     writeStop();
   }
 
   void runForMs(uint16_t ms) {
+    burstMode = false;
     runUntilMs = millis() + ms;
     writeRun();
   }
 
   void runForMsAtUs(uint16_t ms, int pulseUs) {
+    burstMode = false;
     runUntilMs = millis() + ms;
     writeRun(constrainPumpRunUs(pulseUs));
   }
 
+  void runForMsAtUsBurst(uint16_t ms, int pulseUs, uint16_t onMs, uint16_t offMs) {
+    uint32_t now = millis();
+    runUntilMs = now + ms;
+    burstCycleStartedMs = now;
+    burstOnMs = onMs;
+    burstOffMs = offMs;
+    burstRunUs = constrainPumpRunUs(pulseUs);
+    burstMode = offMs > 0;
+    outputRunning = false;
+    updateBurstOutput();
+  }
+
   void runContinuous() {
+    burstMode = false;
     runUntilMs = millis() + 30000; // 30s max safety
     writeRun();
+  }
+
+  void runContinuousAtUs(int pulseUs) {
+    burstMode = false;
+    runUntilMs = millis() + 30000; // 30s max safety
+    writeRun(constrainPumpRunUs(pulseUs));
   }
 
   void update() {
     if (runUntilMs > 0 && millis() >= runUntilMs) {
       stop();
+      return;
+    }
+    if (burstMode && isRunning()) {
+      updateBurstOutput();
     }
   }
 
@@ -541,7 +603,36 @@ public:
 private:
   Servo *servo = nullptr;
   uint32_t runUntilMs = 0;
+  uint32_t burstCycleStartedMs = 0;
   int runUs = PUMP_STOP_US;
+  int burstRunUs = PUMP_STOP_US;
+  uint16_t burstOnMs = 0;
+  uint16_t burstOffMs = 0;
+  bool burstMode = false;
+  bool outputRunning = false;
+
+  void updateBurstOutput() {
+    if (!burstMode || burstOffMs == 0) {
+      writeRun(burstRunUs);
+      outputRunning = true;
+      return;
+    }
+    uint32_t cycleMs = (uint32_t)burstOnMs + (uint32_t)burstOffMs;
+    if (cycleMs == 0) {
+      writeStop();
+      outputRunning = false;
+      return;
+    }
+    uint32_t elapsed = (millis() - burstCycleStartedMs) % cycleMs;
+    bool shouldRun = elapsed < burstOnMs;
+    if (shouldRun && !outputRunning) {
+      writeRun(burstRunUs);
+      outputRunning = true;
+    } else if (!shouldRun && outputRunning) {
+      writeStop();
+      outputRunning = false;
+    }
+  }
 
   void writeStop() {
     if (servo != nullptr) {
@@ -581,6 +672,17 @@ float titrantPumpFlowRateGps = 0.0f;
 float samplePumpFlowRateGps = 0.0f;
 int titrantPumpRunUs = TITRANT_PUMP_DEFAULT_RUN_US;
 int samplePumpRunUs = SAMPLE_PUMP_DEFAULT_RUN_US;
+int titrantDosePercent = TITRANT_DOSE_DEFAULT_PERCENT;
+uint16_t titrantBurstOnMs = TITRANT_BURST_ON_DEFAULT_MS;
+uint16_t titrantBurstOffMs = TITRANT_BURST_OFF_DEFAULT_MS;
+bool manualSweepActive = false;
+bool manualSweepTitrant = true;
+int manualSweepStartUs = TITRANT_PUMP_DEFAULT_RUN_US;
+int manualSweepEndUs = PUMP_MAX_RUN_US;
+int manualSweepLastUs = 0;
+uint32_t manualSweepStartedMs = 0;
+uint32_t manualSweepDurationMs = 10000;
+uint32_t manualSweepLastCommandMs = 0;
 float initialBottleWeight = 0.0f;
 float sampleStartWeight = 0.0f;
 float sampleDeliveredGrams = 0.0f;
@@ -640,7 +742,72 @@ void setState(RunState next, const String &status) {
   displayDirty = true;
 }
 
+int currentManualSweepUs() {
+  if (!manualSweepActive || manualSweepDurationMs == 0) {
+    return manualSweepLastUs > 0 ? manualSweepLastUs : manualSweepStartUs;
+  }
+  uint32_t elapsed = millis() - manualSweepStartedMs;
+  if (elapsed >= manualSweepDurationMs) {
+    return manualSweepEndUs;
+  }
+  long delta = (long)manualSweepEndUs - (long)manualSweepStartUs;
+  long current = (long)manualSweepStartUs + (delta * (long)elapsed) / (long)manualSweepDurationMs;
+  return constrainPumpRunUs((int)current);
+}
+
+void stopManualSweep(bool stopPumps) {
+  manualSweepActive = false;
+  manualSweepLastCommandMs = 0;
+  if (stopPumps) {
+    pump.stop();
+    samplePump.stop();
+  }
+}
+
+void startManualSweep(bool titrant, int startUs, int endUs, uint16_t seconds) {
+  manualSweepActive = true;
+  manualSweepTitrant = titrant;
+  manualSweepStartUs = constrainPumpRunUs(startUs);
+  manualSweepEndUs = constrainPumpRunUs(endUs);
+  manualSweepStartedMs = millis();
+  manualSweepDurationMs = (uint32_t)constrain(seconds, 1, 120) * 1000UL;
+  manualSweepLastUs = 0;
+  manualSweepLastCommandMs = 0;
+  if (manualSweepTitrant) {
+    samplePump.stop();
+  } else {
+    pump.stop();
+  }
+  statusLine = String("Sweep ") + (manualSweepTitrant ? "titrant" : "sample");
+  displayDirty = true;
+}
+
+void updateManualSweep() {
+  if (!manualSweepActive) {
+    return;
+  }
+  uint32_t now = millis();
+  int currentUs = currentManualSweepUs();
+  if (currentUs != manualSweepLastUs || now - manualSweepLastCommandMs >= 1000UL) {
+    if (manualSweepTitrant) {
+      pump.runContinuousAtUs(currentUs);
+    } else {
+      samplePump.runContinuousAtUs(currentUs);
+    }
+    manualSweepLastUs = currentUs;
+    manualSweepLastCommandMs = now;
+    statusLine = String("Sweep ") + (manualSweepTitrant ? "titrant " : "sample ") + String(currentUs) + "us";
+    displayDirty = true;
+  }
+  if (now - manualSweepStartedMs >= manualSweepDurationMs) {
+    stopManualSweep(true);
+    statusLine = String("Sweep done @ ") + String(currentUs) + "us";
+    displayDirty = true;
+  }
+}
+
 void updatePumpTimeouts() {
+  updateManualSweep();
   pump.update();
   samplePump.update();
 }
@@ -751,7 +918,7 @@ bool applyStoichPredoseIfNeeded() {
 
   activePulseMs = pulseMs;
   activeSettleMs = clampSettleMs(settings, STOICH_PREDOSE_SETTLE_MS);
-  pump.runForMs(activePulseMs);
+  pump.runForMsAtUsBurst(activePulseMs, titrantPumpRunUs, titrantBurstOnMs, titrantBurstOffMs);
   setState(RunState::Dosing, String("Predose ") + String(consumedGrams, 1) + "/" + String(stoichPredoseTargetGrams, 1) + "g");
   return true;
 }
@@ -1757,10 +1924,10 @@ void runController() {
       : decideAdaptiveDose(settings, activeControlValue(), consumedGrams, phDynamics);
 
   if (decision.action == TitrationAction::Dose) {
-    activePulseMs = decision.pumpPulseMs;
+    activePulseMs = scaleTitrantPulseMs(decision.pumpPulseMs, titrantDosePercent);
     activeSettleMs = decision.settleMs;
-    pump.runForMs(decision.pumpPulseMs);
-    setState(RunState::Dosing, String("Pulse ") + String(decision.pumpPulseMs) + "ms");
+    pump.runForMsAtUsBurst(activePulseMs, titrantPumpRunUs, titrantBurstOnMs, titrantBurstOffMs);
+    setState(RunState::Dosing, String("Pulse ") + String(activePulseMs) + "ms");
   } else if (decision.action == TitrationAction::Wait) {
     activePulseMs = 0;
     activeSettleMs = decision.settleMs;
@@ -1959,7 +2126,13 @@ String htmlPage() {
   page += String(titrantPumpRunUs);
   page += F("'></label><label>Sample pump PWM us<input name='sample_run_us' type='number' min='1000' max='1500' step='1' value='");
   page += String(samplePumpRunUs);
-  page += F("'></label></div><p class='tiny'>Measures each pump independently by mass. PWM: 1000 fast, 1500 stop/slow limit. Re-run calibration after changing tubing, pump head, liquid, viscosity, or PWM speed.</p></div>");
+  page += F("'></label><label>Titrant dose %<input name='titrant_dose_pct' type='number' min='5' max='100' step='1' value='");
+  page += String(titrantDosePercent);
+  page += F("'></label><label>Burst on ms<input name='titrant_burst_on_ms' type='number' min='1' max='1000' step='1' value='");
+  page += String(titrantBurstOnMs);
+  page += F("'></label><label>Burst off ms<input name='titrant_burst_off_ms' type='number' min='0' max='5000' step='1' value='");
+  page += String(titrantBurstOffMs);
+  page += F("'></label></div><p class='tiny'>Dose % scales automatic titrant pulse time. Burst mode runs the titrant pump for on ms, then pauses for off ms inside each dose window.</p></div>");
   page += F("<div class='card'><h2>Scale</h2><div class='row'><label>Scale factor<input name='scale_factor' type='number' min='1' max='100000' step='0.1' value='");
   page += String(scaleSensor.calibrationFactor(), 1);
   page += F("'></label></div><p class='tiny'>Tare scale resets the reactor baseline. Scale factor is the HX711 conversion value used for grams.</p></div>");
@@ -1997,11 +2170,11 @@ String htmlPage() {
   page += F(" g.</p><p class='tiny'>Use Admin for known titrant molarity, blank, and formula. A future standardization step can calculate titrant factor from a primary standard.</p></div>");
   page += F("<div class='card'><h2>Save</h2><p class='tiny'>Saving stores pump flow, scale factor, and pH/mV two-point calibration in flash. WiFi and method settings are kept separate.</p><button class='primary' type='submit'>Save calibration</button></div></form></section>");
 
-  page += F("<section id='tab-manual' class='panel'><div class='card full'><h2>Manual Operation</h2><form id='manualForm' action='/action' method='get' class='row'><label class='mini'>Run seconds<input name='sec' type='number' min='0.1' max='30' step='0.1' value='1.0'></label><label class='mini'>Titrant PWM us<input name='titrant_us' type='number' min='1000' max='1500' step='1' value='");
+  page += F("<section id='tab-manual' class='panel'><div class='card full'><h2>Manual Operation</h2><form id='manualForm' action='/action' method='get' class='row'><label class='mini'>Run ms<input name='ms' type='number' min='5' max='30000' step='1' value='1000'></label><label class='mini'>Titrant PWM us<input name='titrant_us' type='number' min='1000' max='1500' step='1' value='");
   page += String(titrantPumpRunUs);
   page += F("'></label><label class='mini'>Sample PWM us<input name='sample_us' type='number' min='1000' max='1500' step='1' value='");
   page += String(samplePumpRunUs);
-  page += F("'></label><button class='btn' name='cmd' value='manual_titrant' type='submit'>Run titrant pump</button><button class='btn' name='cmd' value='manual_sample' type='submit'>Run sample pump</button><button class='btn danger' name='cmd' value='manual_stop' type='submit'>Stop pumps</button></form><p class='tiny'>Manual pump actions are blocked while titration or calibration is active. PWM: 1000 fast, 1500 stop/slow limit. Use seconds and PWM here for priming tubing and speed tests.</p></div></section>");
+  page += F("'></label><label class='mini'>Burst on ms<input name='burst_on_ms' type='number' min='1' max='1000' step='1' value='5'></label><label class='mini'>Burst off ms<input name='burst_off_ms' type='number' min='0' max='5000' step='1' value='100'></label><label class='mini'>Sweep start us<input name='sweep_start_us' type='number' min='1000' max='1500' step='1' value='1000'></label><label class='mini'>Sweep end us<input name='sweep_end_us' type='number' min='1000' max='1500' step='1' value='1500'></label><label class='mini'>Sweep seconds<input name='sweep_sec' type='number' min='1' max='120' step='1' value='20'></label><button class='btn' name='cmd' value='manual_titrant' type='submit'>Run titrant pump</button><button class='btn' name='cmd' value='manual_sample' type='submit'>Run sample pump</button><button class='btn' name='cmd' value='manual_sweep_titrant' type='submit'>Sweep titrant</button><button class='btn' name='cmd' value='manual_sweep_sample' type='submit'>Sweep sample</button><button class='btn primary' name='cmd' value='manual_capture_sweep' type='submit'>Capture current</button><button class='btn danger' name='cmd' value='manual_stop' type='submit'>Stop pumps</button></form><p class='tiny'>Manual actions are blocked while titration or calibration is active. Run uses burst on/off values, e.g. 5ms on and 100ms off.</p></div></section>");
 
   page += F("<section id='tab-admin' class='panel'><div class='split'><div><form action='/set' method='get' class='card'><h2>Settings</h2><div class='row'>");
   page += F("<label>Method<select id='methodSelect' name='method'><option value='ph_ep'");
@@ -2338,6 +2511,18 @@ void handleSet() {
     samplePump.setRunPulseUs(samplePumpRunUs);
     calibrationChanged = true;
   }
+  if (server.hasArg("titrant_dose_pct")) {
+    titrantDosePercent = constrainTitrantDosePercent(server.arg("titrant_dose_pct").toInt());
+    calibrationChanged = true;
+  }
+  if (server.hasArg("titrant_burst_on_ms")) {
+    titrantBurstOnMs = constrainTitrantBurstOnMs(server.arg("titrant_burst_on_ms").toInt());
+    calibrationChanged = true;
+  }
+  if (server.hasArg("titrant_burst_off_ms")) {
+    titrantBurstOffMs = constrainTitrantBurstOffMs(server.arg("titrant_burst_off_ms").toInt());
+    calibrationChanged = true;
+  }
   if (server.hasArg("scale_factor")) {
     scaleSensor.setCalibrationFactor(constrain(server.arg("scale_factor").toFloat(), 1.0f, 100000.0f));
     calibrationChanged = true;
@@ -2407,9 +2592,15 @@ void handleSet() {
 void handleAction() {
   updatePumpTimeouts();
   String cmd = server.arg("cmd");
-  float manualSeconds = server.hasArg("sec") ? server.arg("sec").toFloat() : (server.arg("ms").toFloat() / 1000.0f);
-  manualSeconds = constrain(manualSeconds, 0.1f, 30.0f);
-  uint16_t manualMs = (uint16_t)(manualSeconds * 1000.0f + 0.5f);
+  uint16_t manualMs = 25;
+  if (server.hasArg("ms")) {
+    manualMs = (uint16_t)constrain(server.arg("ms").toInt(), 5, 30000);
+  } else if (server.hasArg("sec")) {
+    float manualSeconds = constrain(server.arg("sec").toFloat(), 0.005f, 30.0f);
+    manualMs = (uint16_t)(manualSeconds * 1000.0f + 0.5f);
+  }
+  uint16_t manualBurstOnMs = constrainTitrantBurstOnMs(server.hasArg("burst_on_ms") ? server.arg("burst_on_ms").toInt() : titrantBurstOnMs);
+  uint16_t manualBurstOffMs = constrainTitrantBurstOffMs(server.hasArg("burst_off_ms") ? server.arg("burst_off_ms").toInt() : titrantBurstOffMs);
   int manualTitrantUs = titrantPumpRunUs;
   int manualSampleUs = samplePumpRunUs;
   if (server.hasArg("titrant_us")) {
@@ -2482,23 +2673,61 @@ void handleAction() {
   } else if (cmd == "manual_titrant") {
     returnTab = "manual";
     if (!isActiveState() && state != RunState::Calibrating) {
+      stopManualSweep(false);
       samplePump.stop();
       activePulseMs = manualMs;
-      pump.runForMsAtUs(manualMs, manualTitrantUs);
-      statusLine = String("Manual titrant ") + String(manualSeconds, 1) + "s @ " + String(manualTitrantUs) + "us";
+      pump.runForMsAtUsBurst(manualMs, manualTitrantUs, manualBurstOnMs, manualBurstOffMs);
+      statusLine = String("Manual titrant ") + String(manualMs) + "ms @ " + String(manualTitrantUs) + "us " + String(manualBurstOnMs) + "/" + String(manualBurstOffMs);
       displayDirty = true;
     }
   } else if (cmd == "manual_sample") {
     returnTab = "manual";
     if (!isActiveState() && state != RunState::Calibrating) {
+      stopManualSweep(false);
       pump.stop();
       activePulseMs = 0;
-      samplePump.runForMsAtUs(manualMs, manualSampleUs);
-      statusLine = String("Manual sample ") + String(manualSeconds, 1) + "s @ " + String(manualSampleUs) + "us";
+      samplePump.runForMsAtUsBurst(manualMs, manualSampleUs, manualBurstOnMs, manualBurstOffMs);
+      statusLine = String("Manual sample ") + String(manualMs) + "ms @ " + String(manualSampleUs) + "us " + String(manualBurstOnMs) + "/" + String(manualBurstOffMs);
+      displayDirty = true;
+    }
+  } else if (cmd == "manual_sweep_titrant") {
+    returnTab = "manual";
+    if (!isActiveState() && state != RunState::Calibrating) {
+      int startUs = server.hasArg("sweep_start_us") ? server.arg("sweep_start_us").toInt() : titrantPumpRunUs;
+      int endUs = server.hasArg("sweep_end_us") ? server.arg("sweep_end_us").toInt() : PUMP_MAX_RUN_US;
+      uint16_t sweepSeconds = (uint16_t)(server.hasArg("sweep_sec") ? server.arg("sweep_sec").toInt() : 20);
+      startManualSweep(true, startUs, endUs, sweepSeconds);
+    }
+  } else if (cmd == "manual_sweep_sample") {
+    returnTab = "manual";
+    if (!isActiveState() && state != RunState::Calibrating) {
+      int startUs = server.hasArg("sweep_start_us") ? server.arg("sweep_start_us").toInt() : samplePumpRunUs;
+      int endUs = server.hasArg("sweep_end_us") ? server.arg("sweep_end_us").toInt() : PUMP_MAX_RUN_US;
+      uint16_t sweepSeconds = (uint16_t)(server.hasArg("sweep_sec") ? server.arg("sweep_sec").toInt() : 20);
+      startManualSweep(false, startUs, endUs, sweepSeconds);
+    }
+  } else if (cmd == "manual_capture_sweep") {
+    returnTab = "manual";
+    if (manualSweepActive) {
+      int capturedUs = currentManualSweepUs();
+      if (manualSweepTitrant) {
+        titrantPumpRunUs = capturedUs;
+        pump.setRunPulseUs(titrantPumpRunUs);
+      } else {
+        samplePumpRunUs = capturedUs;
+        samplePump.setRunPulseUs(samplePumpRunUs);
+      }
+      saveCalibration();
+      stopManualSweep(true);
+      statusLine = String("Captured ") + (manualSweepTitrant ? "titrant " : "sample ") + String(capturedUs) + "us";
+      displayDirty = true;
+    } else {
+      statusLine = "No sweep active";
       displayDirty = true;
     }
   } else if (cmd == "manual_stop") {
     returnTab = "manual";
+    stopManualSweep(false);
     pump.stop();
     samplePump.stop();
     activePulseMs = 0;
@@ -2580,6 +2809,12 @@ void handleJson() {
   json += ",\"sample_gps\":" + String(samplePumpFlowRateGps, 4);
   json += ",\"titrant_run_us\":" + String(titrantPumpRunUs);
   json += ",\"sample_run_us\":" + String(samplePumpRunUs);
+  json += ",\"titrant_dose_pct\":" + String(titrantDosePercent);
+  json += ",\"titrant_burst_on_ms\":" + String(titrantBurstOnMs);
+  json += ",\"titrant_burst_off_ms\":" + String(titrantBurstOffMs);
+  json += ",\"manual_sweep\":" + String(manualSweepActive ? "true" : "false");
+  json += ",\"manual_sweep_pump\":\"" + String(manualSweepTitrant ? "titrant" : "sample") + "\"";
+  json += ",\"manual_sweep_us\":" + String(currentManualSweepUs());
   json += ",\"scale_factor\":" + String(scaleSensor.calibrationFactor(), 2);
   json += ",\"scale_filtered\":" + String(lastScale.filtered ? "true" : "false");
   json += ",\"scale_rejected\":" + String(lastScale.rejected ? "true" : "false");
@@ -2780,6 +3015,9 @@ void saveCalibration() {
     prefs.putFloat("sample_gps", samplePumpFlowRateGps);
     prefs.putInt("titrant_us", titrantPumpRunUs);
     prefs.putInt("sample_us", samplePumpRunUs);
+    prefs.putInt("dose_pct", titrantDosePercent);
+    prefs.putUShort("burst_on", titrantBurstOnMs);
+    prefs.putUShort("burst_off", titrantBurstOffMs);
     prefs.putFloat("scale_factor", scaleSensor.calibrationFactor());
     prefs.putFloat("low_ads_mv", phCalibration.lowAdsMillivolts);
     prefs.putFloat("low_probe_mv", phCalibration.lowProbeMillivolts);
@@ -2798,6 +3036,9 @@ void loadCalibration() {
     samplePumpFlowRateGps = prefs.getFloat("sample_gps", 0.0f);
     titrantPumpRunUs = constrainPumpRunUs(prefs.getInt("titrant_us", TITRANT_PUMP_DEFAULT_RUN_US));
     samplePumpRunUs = constrainPumpRunUs(prefs.getInt("sample_us", SAMPLE_PUMP_DEFAULT_RUN_US));
+    titrantDosePercent = constrainTitrantDosePercent(prefs.getInt("dose_pct", TITRANT_DOSE_DEFAULT_PERCENT));
+    titrantBurstOnMs = constrainTitrantBurstOnMs(prefs.getUShort("burst_on", TITRANT_BURST_ON_DEFAULT_MS));
+    titrantBurstOffMs = constrainTitrantBurstOffMs(prefs.getUShort("burst_off", TITRANT_BURST_OFF_DEFAULT_MS));
     scaleSensor.setCalibrationFactor(prefs.getFloat("scale_factor", scaleSensor.calibrationFactor()));
     phCalibration.lowAdsMillivolts = prefs.getFloat("low_ads_mv", phCalibration.lowAdsMillivolts);
     phCalibration.lowProbeMillivolts = prefs.getFloat("low_probe_mv", phCalibration.lowProbeMillivolts);

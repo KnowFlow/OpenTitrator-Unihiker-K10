@@ -2,6 +2,7 @@
 **/build/
 .arduino-build/
 .arduino-output/
+.pio/
 *.elf
 *.bin
 *.hex
