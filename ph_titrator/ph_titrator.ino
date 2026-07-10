@@ -587,7 +587,8 @@ public:
   }
 
   void update() {
-    if (runUntilMs > 0 && millis() >= runUntilMs) {
+    uint32_t now = millis();
+    if (deadlineReached(now, runUntilMs)) {
       stop();
       return;
     }
@@ -597,7 +598,8 @@ public:
   }
 
   bool isRunning() const {
-    return runUntilMs > 0 && millis() < runUntilMs;
+    uint32_t now = millis();
+    return runUntilMs != 0U && !deadlineReached(now, runUntilMs);
   }
 
 private:

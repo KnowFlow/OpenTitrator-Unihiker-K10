@@ -299,6 +299,14 @@ inline float absoluteFloat(float value) {
   return value < 0.0f ? -value : value;
 }
 
+inline bool elapsedAtLeast(uint32_t now, uint32_t startedAt, uint32_t durationMs) {
+  return (uint32_t)(now - startedAt) >= durationMs;
+}
+
+inline bool deadlineReached(uint32_t now, uint32_t deadline) {
+  return deadline != 0U && (int32_t)(now - deadline) >= 0;
+}
+
 inline bool isValidPh(float ph) {
   return ph >= 0.0f && ph <= 14.0f;
 }

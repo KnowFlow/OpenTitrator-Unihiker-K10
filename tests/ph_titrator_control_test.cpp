@@ -28,6 +28,18 @@ void expectNear(float actual, float expected, float tolerance, const std::string
 }
 
 int main() {
+  // ---- rollover-safe time helpers ----
+  expectTrue(!elapsedAtLeast(1050U, 1000U, 100U), "elapsed duration not reached");
+  expectTrue(elapsedAtLeast(1100U, 1000U, 100U), "elapsed duration reached");
+  expectTrue(
+      elapsedAtLeast(25U, UINT32_MAX - 49U, 75U),
+      "elapsed duration survives millis rollover");
+
+  expectTrue(!deadlineReached(1000U, 0U), "zero deadline is inactive");
+  expectTrue(!deadlineReached(1099U, 1100U), "deadline not reached");
+  expectTrue(deadlineReached(1100U, 1100U), "deadline reached exactly");
+  expectTrue(deadlineReached(25U, 20U), "deadline survives millis rollover");
+
   TitrationSettings settings;
   settings.mode = TitrationMode::AddBase;
   settings.targetPh = 7.00f;
