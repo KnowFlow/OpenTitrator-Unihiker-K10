@@ -695,7 +695,7 @@ float resultValue = 0.0f;
 float stoichPredoseTargetGrams = 0.0f;
 uint32_t stateStartedMs = 0;
 uint32_t runStartedMs = 0;
-uint32_t endpointHoldStartedMs = 0;
+EndpointHoldTracker endpointHold;
 uint32_t sampleFillingStartedMs = 0;
 uint32_t sampleLastProgressMs = 0;
 uint16_t activePulseMs = 0;
@@ -1311,6 +1311,7 @@ void resetRunData() {
   phFilter.reset();
   phDynamics.reset();
   eqpTracker.reset();
+  endpointHold.reset();
   scaleFilter.reset(scaleReady ? lastScale.grams : 0.0f);
   sensorFaultCount = 0;
   sensorFault = false;
@@ -1358,11 +1359,11 @@ bool startTitration() {
   resultValue = 0.0f;
   refreshStoichPredoseTarget();
   runStartedMs = 0;
-  endpointHoldStartedMs = 0;
+  endpointHold.reset();
   phReady = false;
   stopReason = TitrationStopReason::None;
   runStartedMs = millis();
-  endpointHoldStartedMs = 0;
+  endpointHold.reset();
   if (settings.sampleGrams <= 0.01f) {
     setState(RunState::FilterWarmup, "Stabilizing pH");
   } else {
@@ -1403,7 +1404,7 @@ bool startExistingSampleTitration() {
   resultValue = 0.0f;
   refreshStoichPredoseTarget();
   runStartedMs = millis();
-  endpointHoldStartedMs = 0;
+  endpointHold.reset();
   phReady = false;
   phSampleFresh = false;
   stopReason = TitrationStopReason::None;
@@ -1433,6 +1434,7 @@ void pauseTitration() {
   pausedFromState = state;
   pump.stop();
   samplePump.stop();
+  endpointHold.reset();
   setState(RunState::Paused, "Paused");
 }
 
@@ -1672,6 +1674,7 @@ void sampleSensors() {
         samplePump.stop();
         Serial.println("SENSOR_FAULT");
         stopReason = TitrationStopReason::SensorFault;
+        endpointHold.reset();
         setState(RunState::Error, "SENSOR_FAULT");
       }
 
@@ -1836,12 +1839,6 @@ void runController() {
     if (elapsed < settleMs) {
       return;
     }
-    if (!autoEqpEnabled() && phReady && isEndpointReached(settings, activeControlValue())) {
-      stopReason = TitrationStopReason::TargetReached;
-      resultValue = computeCurrentResult();
-      setState(RunState::Done, reasonLabel(stopReason));
-      return;
-    }
     uint32_t maxSettleMs = (uint32_t)settings.maxSettleSeconds * 1000UL;
     if (maxSettleMs < settleMs) {
       maxSettleMs = settleMs;
@@ -1898,24 +1895,26 @@ void runController() {
     return;
   }
 
-  if (!autoEqpEnabled() && isEndpointReached(settings, activeControlValue())) {
-    if (endpointHoldStartedMs == 0) {
-      endpointHoldStartedMs = millis();
-    }
-    uint32_t holdMs = (uint32_t)settings.holdSeconds * 1000UL;
-    if (holdMs == 0 || millis() - endpointHoldStartedMs >= holdMs) {
+  if (!autoEqpEnabled()) {
+    bool inRange = isEndpointReached(settings, activeControlValue());
+    bool confirmed = endpointHold.update(
+        phSampleFresh,
+        inRange,
+        settings.holdSeconds,
+        millis());
+    if (inRange) {
       pump.stop();
-      stopReason = TitrationStopReason::TargetReached;
-      resultValue = computeCurrentResult();
-      setState(RunState::Done, reasonLabel(stopReason));
-    } else {
-      pump.stop();
-      statusLine = String("Holding ") + endpointText();
-      displayDirty = true;
+      if (confirmed) {
+        stopReason = TitrationStopReason::TargetReached;
+        resultValue = computeCurrentResult();
+        setState(RunState::Done, reasonLabel(stopReason));
+      } else {
+        statusLine = String("Holding ") + endpointText();
+        displayDirty = true;
+      }
+      return;
     }
-    return;
   }
-  endpointHoldStartedMs = 0;
 
   if (applyStoichPredoseIfNeeded()) {
     return;

@@ -40,6 +40,33 @@ int main() {
   expectTrue(deadlineReached(1100U, 1100U), "deadline reached exactly");
   expectTrue(deadlineReached(25U, 20U), "deadline survives millis rollover");
 
+  // ---- EndpointHoldTracker ----
+  {
+    EndpointHoldTracker hold;
+    expectTrue(!hold.update(true, true, 5, 1000U), "hold starts without completing");
+    expectTrue(!hold.update(false, true, 5, 7000U), "stale reading cannot complete hold");
+    expectTrue(!hold.update(true, false, 5, 7000U), "out-of-range reading resets hold");
+    expectTrue(!hold.active(), "hold inactive after leaving range");
+    expectTrue(!hold.update(true, true, 5, 8000U), "re-entry starts a new hold");
+    expectTrue(!hold.update(true, true, 5, 12999U), "new hold needs full duration");
+    expectTrue(hold.update(true, true, 5, 13000U), "continuous hold completes");
+  }
+
+  {
+    EndpointHoldTracker immediate;
+    expectTrue(immediate.update(true, true, 0, 42U), "zero-second hold completes immediately");
+  }
+
+  {
+    EndpointHoldTracker rollover;
+    expectTrue(
+        !rollover.update(true, true, 1, UINT32_MAX - 499U),
+        "rollover hold starts");
+    expectTrue(
+        rollover.update(true, true, 1, 500U),
+        "rollover hold completes");
+  }
+
   TitrationSettings settings;
   settings.mode = TitrationMode::AddBase;
   settings.targetPh = 7.00f;

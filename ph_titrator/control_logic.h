@@ -307,6 +307,44 @@ inline bool deadlineReached(uint32_t now, uint32_t deadline) {
   return deadline != 0U && (int32_t)(now - deadline) >= 0;
 }
 
+struct EndpointHoldTracker {
+  void reset() {
+    active_ = false;
+    startedAtMs_ = 0U;
+  }
+
+  bool active() const {
+    return active_;
+  }
+
+  bool update(
+      bool fresh,
+      bool inRange,
+      uint16_t holdSeconds,
+      uint32_t now) {
+    if (!fresh) {
+      return false;
+    }
+    if (!inRange) {
+      reset();
+      return false;
+    }
+    if (holdSeconds == 0U) {
+      return true;
+    }
+    if (!active_) {
+      active_ = true;
+      startedAtMs_ = now;
+      return false;
+    }
+    return elapsedAtLeast(now, startedAtMs_, (uint32_t)holdSeconds * 1000UL);
+  }
+
+private:
+  bool active_ = false;
+  uint32_t startedAtMs_ = 0U;
+};
+
 inline bool isValidPh(float ph) {
   return ph >= 0.0f && ph <= 14.0f;
 }
