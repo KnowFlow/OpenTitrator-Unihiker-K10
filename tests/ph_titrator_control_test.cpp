@@ -166,9 +166,9 @@ int main() {
   // Steep slope -> micro pulse
   {
     dyn.reset();
-    dyn.add(6.50f, 0);
-    dyn.add(7.50f, 1000); // dpH/dt = 1.0 > 0.08
-    TitrationDecision d = decideAdaptiveDose(settings, 6.82f, 12.0f, dyn);
+    dyn.add(5.00f, 0);
+    dyn.add(5.20f, 1000); // dpH/dt = 0.2 > 0.08
+    TitrationDecision d = decideAdaptiveDose(settings, 5.20f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "steep slope doses");
     expectEqual(d.pumpPulseMs, 25, "steep slope uses 25ms pulse");
     expectEqual(d.settleMs, 15000, "steep slope uses 15s settle");
