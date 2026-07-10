@@ -305,6 +305,8 @@ Open the controller IP in a browser.
 - **Control band**: slows dosing as the signal approaches the endpoint.
 - **Stable delta/s**: slope threshold used to decide whether the signal has settled.
 - **Hold s**: confirmation time after the endpoint is reached.
+
+Endpoint hold uses fresh sensor readings. Entering the endpoint range stops dosing and starts the Hold timer. If any fresh reading leaves the range, the timer resets and dosing evaluation resumes. The run finishes only after the signal remains in range for the complete Hold period.
 - **Min / Max settle s**: minimum and maximum wait after each dose.
 - **Max time s**: maximum titration time protection.
 - **Max used g**: safety limit.
@@ -336,6 +338,8 @@ python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.
 ```
 
 The device restarts automatically when the upload completes.
+
+HTTP OTA stops and locks both pumps before flash writing. A successful update restarts into SetupMode and never resumes the interrupted run. After a failed or aborted upload, use the Web Reset control; hardware A/B buttons are not required for recovery.
 
 ### Method B: Arduino OTA (IDE)
 

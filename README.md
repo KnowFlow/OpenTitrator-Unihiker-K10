@@ -121,6 +121,8 @@ arduino-cli upload -p COM4 --fqbn UNIHIKER:esp32:k10 ./ph_titrator
 python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
 ```
 
+HTTP OTA stops and locks both pumps before flash writing. A successful update restarts into SetupMode and never resumes the interrupted run. After a failed or aborted upload, use the Web Reset control; hardware A/B buttons are not required for recovery.
+
 ### 4. Connect
 
 Join the `K10-pH-Titrator` WiFi, open the AP IP shown on the K10 screen (usually `http://192.168.4.1/`), or use the STA IP if configured.

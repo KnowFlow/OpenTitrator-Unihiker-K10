@@ -305,6 +305,8 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - **Control band**：进入控制区后开始减速。
 - **Stable delta/s**：静置时判断信号稳定的变化率阈值。
 - **Hold s**：达到终点后保持确认时间。
+
+终点保持只使用新的传感器读数。信号进入终点范围后停止加药并开始 Hold 计时；任一新读数退出范围都会清零计时并恢复滴定判断。只有信号在完整 Hold 时段内持续位于终点范围，实验才会完成。
 - **Min / Max settle s**：每次加液后的最短/最长静置时间。
 - **Max time s**：最长滴定时间保护。
 - **Max used g**：安全上限。
@@ -336,6 +338,8 @@ python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.
 ```
 
 上传完成后设备自动重启。
+
+HTTP OTA 在写入固件前会停止并锁定两路泵。更新成功后设备重启进入 SetupMode，不会恢复中断的实验；上传失败或中止后，请使用网页 Reset 复位，无需依赖 A/B 实体按键。
 
 ### 方式 B：Arduino OTA（IDE）
 

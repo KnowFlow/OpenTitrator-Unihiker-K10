@@ -119,6 +119,8 @@ arduino-cli upload -p COM4 --fqbn UNIHIKER:esp32:k10 ./ph_titrator
 python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
 ```
 
+HTTP OTA 在写入固件前会停止并锁定两路泵。更新成功后设备重启进入 SetupMode，不会恢复中断的实验；上传失败或中止后，请使用网页 Reset 复位，无需依赖 A/B 实体按键。
+
 ### 4. 连接
 
 连接 `K10-pH-Titrator` WiFi，打开 K10 屏幕上显示的 AP IP（通常为 `http://192.168.4.1/`），或 STA IP（若已配置）。
