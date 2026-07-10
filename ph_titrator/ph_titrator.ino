@@ -708,6 +708,9 @@ bool sensorFault = false;
 bool displayDirty = true;
 bool webReady = false;
 bool otaReady = false;
+bool httpOtaSafetyLock = false;
+bool httpOtaInProgress = false;
+bool httpOtaSucceeded = false;
 bool restartPending = false;
 uint32_t restartAtMs = 0;
 bool calibrationNeedsReset = false;
@@ -767,6 +770,11 @@ void stopManualSweep(bool stopPumps) {
 }
 
 void startManualSweep(bool titrant, int startUs, int endUs, uint16_t seconds) {
+  if (httpOtaSafetyLock) {
+    statusLine = "OTA locked";
+    displayDirty = true;
+    return;
+  }
   manualSweepActive = true;
   manualSweepTitrant = titrant;
   manualSweepStartUs = constrainPumpRunUs(startUs);
@@ -1332,6 +1340,9 @@ void resetRunData() {
 }
 
 bool startTitration() {
+  if (httpOtaSafetyLock) {
+    return false;
+  }
   if (!lastPh.adcOk || !scaleReady || sensorFault) {
     pump.stop();
     samplePump.stop();
@@ -1377,6 +1388,9 @@ bool startTitration() {
 }
 
 bool startExistingSampleTitration() {
+  if (httpOtaSafetyLock) {
+    return false;
+  }
   if (!lastPh.adcOk || !scaleReady || sensorFault) {
     pump.stop();
     samplePump.stop();
@@ -1750,6 +1764,12 @@ void sampleSensors() {
 void runController() {
   updatePumpTimeouts();
 
+  if (httpOtaSafetyLock) {
+    pump.stop();
+    samplePump.stop();
+    return;
+  }
+
   if (state == RunState::SampleFilling) {
     updateSampleDeliveredFromPumpEstimate();
 
@@ -2098,6 +2118,7 @@ String htmlPage() {
   page += phReady ? F("yes") : F("no");
   page += F(" / scale ");
   page += scaleReady ? F("OK") : F("NO");
+  page += F("</p><p class='tiny'>If the status says OTA failed: reset required, use Web Reset above.");
   page += F("</p><p id='netdetail' class='tiny'>AP ");
   page += htmlEscape(apIpAddress);
   page += F(" / STA ");
@@ -2593,6 +2614,21 @@ void handleSet() {
 void handleAction() {
   updatePumpTimeouts();
   String cmd = server.arg("cmd");
+  if (httpOtaSafetyLock) {
+    if (cmd == "reset" && !httpOtaInProgress) {
+      resetFromHttpOtaFailure();
+    } else if (cmd == "panic") {
+      pump.stop();
+      samplePump.stop();
+      statusLine = "OTA locked";
+      displayDirty = true;
+    } else {
+      statusLine = httpOtaInProgress ? "OTA in progress" : "OTA failed: reset required";
+      displayDirty = true;
+    }
+    redirectHomeTab("run");
+    return;
+  }
   uint16_t manualMs = 25;
   if (server.hasArg("ms")) {
     manualMs = (uint16_t)constrain(server.arg("ms").toInt(), 5, 30000);
@@ -2806,6 +2842,8 @@ void handleJson() {
   json += ",\"sta_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false");
   json += ",\"wifi_ssid\":\"" + jsonEscape(wifiSsid) + "\"";
   json += ",\"ota\":" + String(otaReady ? "true" : "false");
+  json += ",\"ota_safety_lock\":" + String(httpOtaSafetyLock ? "true" : "false");
+  json += ",\"ota_in_progress\":" + String(httpOtaInProgress ? "true" : "false");
   json += ",\"titrant_gps\":" + String(titrantPumpFlowRateGps, 4);
   json += ",\"sample_gps\":" + String(samplePumpFlowRateGps, 4);
   json += ",\"titrant_run_us\":" + String(titrantPumpRunUs);
@@ -2832,36 +2870,80 @@ void handleJson() {
   server.send(200, "application/json", json);
 }
 
+void enterHttpOtaSafety() {
+  httpOtaSafetyLock = true;
+  httpOtaInProgress = true;
+  httpOtaSucceeded = false;
+  stopManualSweep(false);
+  pump.stop();
+  samplePump.stop();
+  activePulseMs = 0;
+  endpointHold.reset();
+  setState(RunState::Error, "OTA upload");
+}
+
+void failHttpOta(const String &detail) {
+  httpOtaSafetyLock = true;
+  httpOtaInProgress = false;
+  httpOtaSucceeded = false;
+  stopManualSweep(false);
+  pump.stop();
+  samplePump.stop();
+  activePulseMs = 0;
+  endpointHold.reset();
+  setState(RunState::Error, detail.length() > 0 ? detail : "OTA failed");
+}
+
+void resetFromHttpOtaFailure() {
+  pump.stop();
+  samplePump.stop();
+  stopManualSweep(false);
+  resetRunData();
+  httpOtaInProgress = false;
+  httpOtaSafetyLock = false;
+  httpOtaSucceeded = false;
+  setState(RunState::SetupMode, "OTA reset");
+}
+
 void handleOta() {
+  bool success = httpOtaSucceeded && !httpOtaInProgress;
   server.sendHeader("Connection", "close");
-  server.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
-  if (!Update.hasError()) {
+  server.send(success ? 200 : 500, "text/plain", success ? "OK" : "FAIL");
+  if (success) {
+    httpOtaSafetyLock = true;
     scheduleRestart("OTA update done");
+  } else {
+    failHttpOta("OTA failed");
   }
 }
 
 void handleOtaUpload() {
   HTTPUpload &upload = server.upload();
   if (upload.status == UPLOAD_FILE_START) {
-    statusLine = "OTA upload";
-    displayDirty = true;
+    enterHttpOtaSafety();
     Serial.printf("OTA: %s\n", upload.filename.c_str());
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
       Update.printError(Serial);
+      failHttpOta("OTA start failed");
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
     if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
       Update.printError(Serial);
+      failHttpOta("OTA write failed");
     }
   } else if (upload.status == UPLOAD_FILE_END) {
+    httpOtaInProgress = false;
     if (Update.end(true)) {
-      Serial.printf("OTA Success: %u bytes\n", upload.totalSize);
+      httpOtaSucceeded = true;
       statusLine = "OTA done";
     } else {
       Update.printError(Serial);
-      statusLine = "OTA fail";
+      failHttpOta("OTA failed");
     }
     displayDirty = true;
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    failHttpOta("OTA aborted");
   }
 }
 
@@ -2952,6 +3034,12 @@ void updateNetworkStatus() {
 
 void runCalibration() {
   updatePumpTimeouts();
+
+  if (httpOtaSafetyLock) {
+    pump.stop();
+    samplePump.stop();
+    return;
+  }
 
   static uint32_t calStartMs = 0;
   static int calPhase = 0;
