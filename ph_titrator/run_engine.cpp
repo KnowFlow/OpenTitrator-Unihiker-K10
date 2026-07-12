@@ -4,11 +4,11 @@ RunEngine::RunEngine()
     : phase_(RunPhase::Inactive), stopReason_(RunStopReason::None) {}
 
 RunOutput RunEngine::step(const RunInput &input) {
-  if (input.command == RunCommand::Reset) {
-    reset();
-  } else if (input.context.otaLocked) {
+  if (input.context.otaLocked) {
     phase_ = RunPhase::Error;
     stopReason_ = RunStopReason::SafetyLock;
+  } else if (input.command == RunCommand::Reset) {
+    reset();
   }
 
   RunOutput output{};

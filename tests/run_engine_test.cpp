@@ -76,6 +76,33 @@ int main() {
   expectTrue(locked.stopReason == RunStopReason::SafetyLock, "safety lock retains stop reason");
   expectPumpsStopped(locked);
 
+  RunInput lockedReset = tickInput();
+  lockedReset.command = RunCommand::Reset;
+  lockedReset.context.otaLocked = true;
+  RunOutput lockedResetOutput = engine.step(lockedReset);
+  expectEqual(lockedResetOutput.phase, RunPhase::Error, "locked reset keeps error phase");
+  expectEqual(lockedResetOutput.status, RunStatusCode::SafetyLocked, "locked reset keeps safety status");
+  expectTrue(
+      lockedResetOutput.stopReason == RunStopReason::SafetyLock,
+      "locked reset keeps safety stop reason");
+  expectPumpsStopped(lockedResetOutput);
+
+  RunInput unknownAfterLock = tickInput();
+  unknownAfterLock.command = static_cast<RunCommand>(255U);
+  RunOutput unknownAfterLockOutput = engine.step(unknownAfterLock);
+  expectEqual(
+      unknownAfterLockOutput.phase,
+      RunPhase::Error,
+      "unknown command keeps durable safety error phase");
+  expectEqual(
+      unknownAfterLockOutput.status,
+      RunStatusCode::SafetyLocked,
+      "unknown command keeps durable safety status");
+  expectTrue(
+      unknownAfterLockOutput.stopReason == RunStopReason::SafetyLock,
+      "unknown command keeps durable safety stop reason");
+  expectPumpsStopped(unknownAfterLockOutput);
+
   RunInput reset = tickInput();
   reset.command = RunCommand::Reset;
   RunOutput resetOutput = engine.step(reset);
