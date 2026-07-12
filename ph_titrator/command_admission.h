@@ -25,8 +25,6 @@ enum class WebCommand : uint8_t {
   Recover
 };
 
-enum class AdmissionRunState : uint8_t { Idle, Active, Calibrating };
-
 struct AdmissionContext {
   bool authenticated;
   bool otaSafetyLock;
@@ -79,6 +77,8 @@ inline AdmissionResult admitWebCommand(WebCommand command,
     case WebCommand::ManualStop:
       if (!context.authenticated)
         return AdmissionResult::AuthenticationRequired;
+      if (context.otaSafetyLock || context.otaInProgress)
+        return AdmissionResult::OtaLocked;
       return (context.runActive || context.calibrating)
                  ? AdmissionResult::InvalidState
                  : AdmissionResult::Allowed;
@@ -86,8 +86,14 @@ inline AdmissionResult admitWebCommand(WebCommand command,
     case WebCommand::Start:
     case WebCommand::StartExisting:
     case WebCommand::Pause:
-    case WebCommand::Reset:
     case WebCommand::Tare:
+      if (!context.authenticated)
+        return AdmissionResult::AuthenticationRequired;
+      return (context.otaSafetyLock || context.otaInProgress)
+                 ? AdmissionResult::OtaLocked
+                 : AdmissionResult::Allowed;
+
+    case WebCommand::Reset:
     case WebCommand::Logout:
       return context.authenticated ? AdmissionResult::Allowed
                                    : AdmissionResult::AuthenticationRequired;

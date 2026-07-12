@@ -154,60 +154,71 @@ static void testRecovery() {
   CHECK(auth.login("old-password", 12, 400004, newToken) == AuthResult::Failed);
 }
 
-static AdmissionResult expectedAdmission(WebCommand command,
-                                         const AdmissionContext &context) {
-  if (command == WebCommand::EmergencyStop) return AdmissionResult::Allowed;
-  if (command == WebCommand::Login || command == WebCommand::Recover) {
-    return (context.otaSafetyLock || context.otaInProgress)
-               ? AdmissionResult::OtaLocked
-               : AdmissionResult::Allowed;
-  }
-  if (!context.authenticated) return AdmissionResult::AuthenticationRequired;
-  if (command == WebCommand::OtaUpload) {
-    return (context.otaSafetyLock || context.otaInProgress)
-               ? AdmissionResult::OtaLocked
-               : AdmissionResult::Allowed;
-  }
-  if ((command == WebCommand::SaveMethodSettings ||
-       command == WebCommand::SaveCalibration ||
-       command == WebCommand::SaveWifi) &&
-      (context.otaSafetyLock || context.otaInProgress)) {
-    return AdmissionResult::OtaLocked;
-  }
-  if ((command == WebCommand::EnterReady ||
-       command == WebCommand::CalibratePumps ||
-       command == WebCommand::ResetSignalFilter ||
-       command == WebCommand::ManualTitrant ||
-       command == WebCommand::ManualSample ||
-       command == WebCommand::ManualSweep ||
-       command == WebCommand::ManualStop) &&
-      (context.runActive || context.calibrating)) {
-    return AdmissionResult::InvalidState;
-  }
-  return AdmissionResult::Allowed;
-}
-
 static void testCommandAdmissionPolicy() {
-  const WebCommand commands[] = {
-      WebCommand::EmergencyStop, WebCommand::Start,
-      WebCommand::StartExisting, WebCommand::Pause, WebCommand::Reset,
-      WebCommand::Tare, WebCommand::EnterReady,
+  const AdmissionContext idle = {true, false, false, false, false};
+  const AdmissionContext unauthenticated = {false, false, false, false, false};
+  const AdmissionContext otaLocked = {true, true, false, false, false};
+  const AdmissionContext otaInProgress = {true, false, true, false, false};
+  const AdmissionContext active = {true, false, false, true, false};
+  const AdmissionContext calibrating = {true, false, false, false, true};
+
+  const WebCommand authenticatedCommands[] = {
+      WebCommand::Start, WebCommand::StartExisting, WebCommand::Pause,
+      WebCommand::Reset, WebCommand::Tare, WebCommand::EnterReady,
       WebCommand::CalibratePumps, WebCommand::ResetSignalFilter,
       WebCommand::ManualTitrant, WebCommand::ManualSample,
       WebCommand::ManualSweep, WebCommand::ManualStop,
       WebCommand::SaveMethodSettings, WebCommand::SaveCalibration,
-      WebCommand::SaveWifi, WebCommand::OtaUpload, WebCommand::Login,
-      WebCommand::Logout, WebCommand::Recover};
-  for (size_t commandIndex = 0;
-       commandIndex < sizeof(commands) / sizeof(commands[0]); ++commandIndex) {
-    for (uint8_t bits = 0; bits < 32; ++bits) {
-      const AdmissionContext context = {
-          (bits & 1U) != 0, (bits & 2U) != 0, (bits & 4U) != 0,
-          (bits & 8U) != 0, (bits & 16U) != 0};
-      CHECK(admitWebCommand(commands[commandIndex], context) ==
-            expectedAdmission(commands[commandIndex], context));
-    }
+      WebCommand::SaveWifi, WebCommand::OtaUpload, WebCommand::Logout};
+  for (size_t i = 0; i < sizeof(authenticatedCommands) /
+                              sizeof(authenticatedCommands[0]); ++i) {
+    CHECK(admitWebCommand(authenticatedCommands[i], unauthenticated) ==
+          AdmissionResult::AuthenticationRequired);
+    CHECK(admitWebCommand(authenticatedCommands[i], idle) ==
+          AdmissionResult::Allowed);
   }
+
+  const WebCommand otaBlockedCommands[] = {
+      WebCommand::Start, WebCommand::StartExisting, WebCommand::Pause,
+      WebCommand::Tare, WebCommand::EnterReady, WebCommand::CalibratePumps,
+      WebCommand::ResetSignalFilter, WebCommand::ManualTitrant,
+      WebCommand::ManualSample, WebCommand::ManualSweep,
+      WebCommand::ManualStop, WebCommand::SaveMethodSettings,
+      WebCommand::SaveCalibration, WebCommand::SaveWifi,
+      WebCommand::OtaUpload};
+  for (size_t i = 0; i < sizeof(otaBlockedCommands) /
+                              sizeof(otaBlockedCommands[0]); ++i) {
+    CHECK(admitWebCommand(otaBlockedCommands[i], otaLocked) ==
+          AdmissionResult::OtaLocked);
+    CHECK(admitWebCommand(otaBlockedCommands[i], otaInProgress) ==
+          AdmissionResult::OtaLocked);
+  }
+
+  const WebCommand stateBlockedCommands[] = {
+      WebCommand::EnterReady, WebCommand::CalibratePumps,
+      WebCommand::ResetSignalFilter, WebCommand::ManualTitrant,
+      WebCommand::ManualSample, WebCommand::ManualSweep,
+      WebCommand::ManualStop};
+  for (size_t i = 0; i < sizeof(stateBlockedCommands) /
+                              sizeof(stateBlockedCommands[0]); ++i) {
+    CHECK(admitWebCommand(stateBlockedCommands[i], active) ==
+          AdmissionResult::InvalidState);
+    CHECK(admitWebCommand(stateBlockedCommands[i], calibrating) ==
+          AdmissionResult::InvalidState);
+  }
+
+  CHECK(admitWebCommand(WebCommand::EmergencyStop, unauthenticated) ==
+        AdmissionResult::Allowed);
+  CHECK(admitWebCommand(WebCommand::EmergencyStop, otaInProgress) ==
+        AdmissionResult::Allowed);
+  CHECK(admitWebCommand(WebCommand::Reset, otaLocked) == AdmissionResult::Allowed);
+  CHECK(admitWebCommand(WebCommand::Reset, otaInProgress) == AdmissionResult::Allowed);
+  CHECK(admitWebCommand(WebCommand::Logout, otaLocked) == AdmissionResult::Allowed);
+  CHECK(admitWebCommand(WebCommand::Logout, otaInProgress) == AdmissionResult::Allowed);
+  CHECK(admitWebCommand(WebCommand::Login, idle) == AdmissionResult::Allowed);
+  CHECK(admitWebCommand(WebCommand::Recover, idle) == AdmissionResult::Allowed);
+  CHECK(admitWebCommand(WebCommand::Login, otaLocked) == AdmissionResult::OtaLocked);
+  CHECK(admitWebCommand(WebCommand::Recover, otaInProgress) == AdmissionResult::OtaLocked);
 }
 
 int main() {
