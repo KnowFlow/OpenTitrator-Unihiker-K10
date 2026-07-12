@@ -1,6 +1,23 @@
 $ErrorActionPreference = 'Stop'
 $sketch = Get-Content -Raw (Join-Path $PSScriptRoot '..\ph_titrator\ph_titrator.ino')
 function Need([string]$p,[string]$m) { if ($sketch -notmatch $p) { throw "FAIL: $m" } }
+function Reject([string]$p,[string]$m) { if ($sketch -match $p) { throw "FAIL: $m" } }
+Reject "href='/action\?" 'browser actions must not use GET links'
+Reject "method='get'" 'browser mutation forms must not use GET'
+Reject "fetch\('/action\?" 'browser actions must not put arguments in URLs'
+Reject 'X-Session-Token[''"]?\s*\+|[?&](token|session)=' 'session tokens must never be concatenated into URLs'
+Need "sessionStorage\.getItem\('k10_session'\)" 'browser session must be kept in sessionStorage'
+Need "headers\['X-Session-Token'\]=token" 'browser mutations must use the session header'
+foreach ($id in 'loginForm','logoutButton','recoveryForm') { Need ("id='" + $id + "'") "missing browser authentication control $id" }
+Need 'function apiPost\(path,form,allowAnonymous\)' 'browser mutations need one POST seam'
+Need "fetch\(path,\{method:'POST',headers,body:new URLSearchParams\(form\)\}\)" 'apiPost must form-encode POST bodies'
+Need "response\.status===401[\s\S]*?sessionStorage\.removeItem\('k10_session'\)[\s\S]*?showLogin\(\)" '401 must clear the session and show login'
+Need "response\.status===403" '403 must be handled without clearing the session'
+Need "response\.status===429" '429 must show a generic lockout message'
+Need 'TextEncoder\(\).*?\.encode\(.*?\)\.length|new TextEncoder\(\)\.encode\(.*?\)\.length' 'recovery password validation must count UTF-8 bytes'
+Need "apiPost\('/action',\{cmd:b\.dataset\.cmd\},b\.dataset\.cmd==='panic'\)" 'emergency stop must allow anonymous POST'
+Need "fetch\('/ota',\{method:'POST',headers:headers,body:fd\}\)" 'OTA must POST FormData with token headers'
+Reject "fetch\('/ota'[\s\S]{0,200}Content-Type" 'OTA must not set Content-Type manually'
 Need 'server\.on\("/action",\s*HTTP_POST,\s*handleAction\)' '/action must be POST'
 Need 'server\.on\("/set",\s*HTTP_POST,\s*handleSet\)' '/set must be POST'
 Need 'server\.on\("/action",\s*HTTP_GET,\s*handleMethodNotAllowed\)' 'GET /action must be 405'
