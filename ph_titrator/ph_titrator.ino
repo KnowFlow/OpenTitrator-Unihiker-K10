@@ -13,6 +13,8 @@
 #include "auth_store.h"
 #include "command_admission.h"
 
+struct SettingsCandidate;
+
 UNIHIKER_K10 k10;
 Servo titrantPumpServo;
 Servo samplePumpServo;
@@ -22,6 +24,7 @@ Esp32AuthCrypto authCrypto;
 AuthStore authStore;
 AuthManager authManager(authCrypto);
 bool authStorageReady = false;
+bool otaUploadStartSeen = false;
 bool otaRequestAccepted = false;
 uint8_t otaSessionSlot = 0;
 int otaRejectedStatus = 0;
@@ -2476,9 +2479,68 @@ void handleRecover() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+struct SettingsCandidate {
+  TitrationSettings settings;
+  PhCalibration calibration;
+  TitrationMethod method;
+  float titrantGps;
+  float sampleGps;
+  int titrantRunUs;
+  int sampleRunUs;
+  int titrantDosePercent;
+  uint16_t burstOnMs;
+  uint16_t burstOffMs;
+  float scaleFactor;
+  String wifiSsid;
+  String wifiPassword;
+};
+
+bool validateSettingsCandidate(const SettingsCandidate &candidate, String &error) {
+  if (absoluteFloat(candidate.calibration.highProbeMillivolts - candidate.calibration.lowProbeMillivolts) <= 0.01f ||
+      absoluteFloat(candidate.calibration.highAdsMillivolts - candidate.calibration.lowAdsMillivolts) <= 0.01f) {
+    error = "Bad calibration span"; return false;
+  }
+  return true;
+}
+
+void commitSettingsCandidate(const SettingsCandidate &candidate) {
+  settings = candidate.settings;
+  phCalibration = candidate.calibration;
+  currentMethod = candidate.method;
+  titrantPumpFlowRateGps = candidate.titrantGps;
+  samplePumpFlowRateGps = candidate.sampleGps;
+  titrantPumpRunUs = candidate.titrantRunUs;
+  samplePumpRunUs = candidate.sampleRunUs;
+  titrantDosePercent = candidate.titrantDosePercent;
+  titrantBurstOnMs = candidate.burstOnMs;
+  titrantBurstOffMs = candidate.burstOffMs;
+  scaleSensor.setCalibrationFactor(candidate.scaleFactor);
+  wifiSsid = candidate.wifiSsid;
+  wifiPassword = candidate.wifiPassword;
+  pump.setRunPulseUs(titrantPumpRunUs);
+  samplePump.setRunPulseUs(samplePumpRunUs);
+}
+
 void handleSet() {
   uint8_t sessionSlot;
   if (!requireCommand(WebCommand::SaveMethodSettings, sessionSlot)) return;
+
+  SettingsCandidate candidate = {settings, phCalibration, currentMethod,
+      titrantPumpFlowRateGps, samplePumpFlowRateGps, titrantPumpRunUs, samplePumpRunUs,
+      titrantDosePercent, titrantBurstOnMs, titrantBurstOffMs,
+      scaleSensor.calibrationFactor(), wifiSsid, wifiPassword};
+  TitrationSettings &settings = candidate.settings;
+  PhCalibration &phCalibration = candidate.calibration;
+  TitrationMethod &currentMethod = candidate.method;
+  float &titrantPumpFlowRateGps = candidate.titrantGps;
+  float &samplePumpFlowRateGps = candidate.sampleGps;
+  int &titrantPumpRunUs = candidate.titrantRunUs;
+  int &samplePumpRunUs = candidate.sampleRunUs;
+  int &titrantDosePercent = candidate.titrantDosePercent;
+  uint16_t &titrantBurstOnMs = candidate.burstOnMs;
+  uint16_t &titrantBurstOffMs = candidate.burstOffMs;
+  String &wifiSsid = candidate.wifiSsid;
+  String &wifiPassword = candidate.wifiPassword;
 
   bool wifiChanged = false;
   bool endpointChanged = false;
@@ -2644,12 +2706,10 @@ void handleSet() {
   }
   if (server.hasArg("titrant_run_us")) {
     titrantPumpRunUs = constrainPumpRunUs(server.arg("titrant_run_us").toInt());
-    pump.setRunPulseUs(titrantPumpRunUs);
     calibrationChanged = true;
   }
   if (server.hasArg("sample_run_us")) {
     samplePumpRunUs = constrainPumpRunUs(server.arg("sample_run_us").toInt());
-    samplePump.setRunPulseUs(samplePumpRunUs);
     calibrationChanged = true;
   }
   if (server.hasArg("titrant_dose_pct")) {
@@ -2665,21 +2725,8 @@ void handleSet() {
     calibrationChanged = true;
   }
   if (server.hasArg("scale_factor")) {
-    scaleSensor.setCalibrationFactor(constrain(server.arg("scale_factor").toFloat(), 1.0f, 100000.0f));
+    candidate.scaleFactor = constrain(server.arg("scale_factor").toFloat(), 1.0f, 100000.0f);
     calibrationChanged = true;
-  }
-  if (calibrationChanged) {
-    if (absoluteFloat(phCalibration.highProbeMillivolts - phCalibration.lowProbeMillivolts) > 0.01f &&
-        absoluteFloat(phCalibration.highAdsMillivolts - phCalibration.lowAdsMillivolts) > 0.01f) {
-      saveCalibration();
-      phFilter.reset();
-      phReady = false;
-    } else {
-      statusLine = "Bad calibration span";
-      displayDirty = true;
-      redirectHome();
-      return;
-    }
   }
 
   if (server.hasArg("ssid")) {
@@ -2693,29 +2740,46 @@ void handleSet() {
     }
 
     if (nextSsid != wifiSsid || nextPassword != wifiPassword) {
-      saveWifiSettings(nextSsid, nextPassword);
+      wifiSsid = nextSsid;
+      wifiPassword = nextPassword;
       wifiChanged = true;
     }
   }
 
   if (methodRequested && requestedMethod != currentMethod) {
     methodChanged = true;
-    selectMethod(requestedMethod, true);
+    currentMethod = requestedMethod;
+    applyTitrationMethodPreset(settings, currentMethod);
+    applyMethodAux(settings, loadMethodAux(currentMethod));
     endpointChanged = false;
   } else if (methodRequested && requestedMethod != TitrationMethod::Manual &&
              !methodFieldChanged && !methodMatchesPreset(requestedMethod)) {
     methodChanged = true;
-    selectMethod(requestedMethod, true);
+    currentMethod = requestedMethod;
+    applyTitrationMethodPreset(settings, currentMethod);
+    applyMethodAux(settings, loadMethodAux(currentMethod));
     endpointChanged = false;
   } else if (methodFieldChanged && currentMethod != TitrationMethod::Manual) {
     currentMethod = TitrationMethod::Manual;
-    saveSelectedMethod();
-  } else if (methodRequested) {
-    saveSelectedMethod();
   }
-  if (methodAuxChanged) {
-    saveMethodAux(currentMethod);
+  String validationError;
+  if (!validateSettingsCandidate(candidate, validationError)) {
+    sendApiError(422, "invalid_settings", validationError); return;
   }
+  commitSettingsCandidate(candidate);
+  if (methodChanged) {
+    phFilter.reset(); phDynamics.reset(); eqpTracker.reset();
+    phReady = false; phSampleFresh = false;
+    resetRunData();
+    setState(RunState::SetupMode, String("Method ") + methodLabel(currentMethod));
+  }
+  if (methodRequested || methodFieldChanged) saveSelectedMethod();
+  if (methodAuxChanged) saveMethodAux(currentMethod);
+  if (calibrationChanged) {
+    saveCalibration();
+    phFilter.reset(); phReady = false;
+  }
+  if (wifiChanged) saveWifiSettings(wifiSsid, wifiPassword);
   if (methodChanged || methodFieldChanged || endpointChanged) {
     endpointHold.reset();
   }
@@ -2759,6 +2823,7 @@ void handleAction() {
   if (httpOtaSafetyLock) {
     if (cmd == "reset" && !httpOtaInProgress && !httpOtaSucceeded) {
       resetFromHttpOtaFailure();
+      authManager.recordSuccessfulWrite(sessionSlot, millis());
     } else if (cmd == "panic") {
       pump.stop();
       samplePump.stop();
@@ -3048,11 +3113,20 @@ void resetFromHttpOtaFailure() {
   setState(RunState::SetupMode, "OTA reset");
 }
 
+void clearOtaRequestState() {
+  otaUploadStartSeen = false;
+  otaRequestAccepted = false;
+  otaSessionSlot = 0;
+  otaRejectedStatus = 0;
+}
+
 void handleOta() {
-  if (!otaRequestAccepted) {
-    sendApiError(otaRejectedStatus ? otaRejectedStatus : 401,
-                 otaRejectedStatus == 403 ? "ota_locked" : "authentication_required", "OTA rejected");
-    otaRejectedStatus = 0; return;
+  if (!otaUploadStartSeen || !otaRequestAccepted) {
+    int status = otaRejectedStatus ? otaRejectedStatus : 401;
+    sendApiError(status,
+                 status == 403 ? "ota_locked" : "authentication_required", "OTA rejected");
+    clearOtaRequestState();
+    return;
   }
   bool success = httpOtaSucceeded && !httpOtaInProgress;
   server.sendHeader("Connection", "close");
@@ -3064,12 +3138,15 @@ void handleOta() {
   } else {
     failHttpOta("OTA failed");
   }
+  clearOtaRequestState();
 }
 
 void handleOtaUpload() {
   HTTPUpload &upload = server.upload();
   if (upload.status == UPLOAD_FILE_START) {
-    otaRequestAccepted = false; otaRejectedStatus = 401;
+    clearOtaRequestState();
+    otaUploadStartSeen = true;
+    otaRejectedStatus = 401;
     char token[33]; uint8_t slot = 0;
     if (authStorageReady && readSessionToken(token) &&
         authManager.validateSession(token, millis(), slot) == AuthResult::Ok) {
@@ -3104,9 +3181,11 @@ void handleOtaUpload() {
     }
     displayDirty = true;
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
-    if (!otaRequestAccepted) return;
-    Update.abort();
-    failHttpOta("OTA aborted");
+    if (otaRequestAccepted) {
+      Update.abort();
+      failHttpOta("OTA aborted");
+    }
+    clearOtaRequestState();
   }
 }
 
