@@ -1,4 +1,5 @@
 #include "../ph_titrator/auth_core.h"
+#include "../ph_titrator/command_admission.h"
 
 #include <cstdio>
 #include <cstring>
@@ -153,12 +154,69 @@ static void testRecovery() {
   CHECK(auth.login("old-password", 12, 400004, newToken) == AuthResult::Failed);
 }
 
+static AdmissionResult expectedAdmission(WebCommand command,
+                                         const AdmissionContext &context) {
+  if (command == WebCommand::EmergencyStop) return AdmissionResult::Allowed;
+  if (command == WebCommand::Login || command == WebCommand::Recover) {
+    return (context.otaSafetyLock || context.otaInProgress)
+               ? AdmissionResult::OtaLocked
+               : AdmissionResult::Allowed;
+  }
+  if (!context.authenticated) return AdmissionResult::AuthenticationRequired;
+  if (command == WebCommand::OtaUpload) {
+    return (context.otaSafetyLock || context.otaInProgress)
+               ? AdmissionResult::OtaLocked
+               : AdmissionResult::Allowed;
+  }
+  if ((command == WebCommand::SaveMethodSettings ||
+       command == WebCommand::SaveCalibration ||
+       command == WebCommand::SaveWifi) &&
+      (context.otaSafetyLock || context.otaInProgress)) {
+    return AdmissionResult::OtaLocked;
+  }
+  if ((command == WebCommand::EnterReady ||
+       command == WebCommand::CalibratePumps ||
+       command == WebCommand::ResetSignalFilter ||
+       command == WebCommand::ManualTitrant ||
+       command == WebCommand::ManualSample ||
+       command == WebCommand::ManualSweep ||
+       command == WebCommand::ManualStop) &&
+      (context.runActive || context.calibrating)) {
+    return AdmissionResult::InvalidState;
+  }
+  return AdmissionResult::Allowed;
+}
+
+static void testCommandAdmissionPolicy() {
+  const WebCommand commands[] = {
+      WebCommand::EmergencyStop, WebCommand::Start,
+      WebCommand::StartExisting, WebCommand::Pause, WebCommand::Reset,
+      WebCommand::Tare, WebCommand::EnterReady,
+      WebCommand::CalibratePumps, WebCommand::ResetSignalFilter,
+      WebCommand::ManualTitrant, WebCommand::ManualSample,
+      WebCommand::ManualSweep, WebCommand::ManualStop,
+      WebCommand::SaveMethodSettings, WebCommand::SaveCalibration,
+      WebCommand::SaveWifi, WebCommand::OtaUpload, WebCommand::Login,
+      WebCommand::Logout, WebCommand::Recover};
+  for (size_t commandIndex = 0;
+       commandIndex < sizeof(commands) / sizeof(commands[0]); ++commandIndex) {
+    for (uint8_t bits = 0; bits < 32; ++bits) {
+      const AdmissionContext context = {
+          (bits & 1U) != 0, (bits & 2U) != 0, (bits & 4U) != 0,
+          (bits & 8U) != 0, (bits & 16U) != 0};
+      CHECK(admitWebCommand(commands[commandIndex], context) ==
+            expectedAdmission(commands[commandIndex], context));
+    }
+  }
+}
+
 int main() {
   testPasswordLimitsAndVerification();
   testLoginLockout();
   testSessionsAndExpiry();
   testMalformedTokens();
   testRecovery();
+  testCommandAdmissionPolicy();
   if (failures != 0) return 1;
   std::puts("All auth core tests passed");
   return 0;
