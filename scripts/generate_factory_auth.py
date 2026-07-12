@@ -55,8 +55,10 @@ def generate_files(device_id, header_path, label_path, iterations, force):
     backups = []
     installed = []
     try:
-        temps = [_secure_temp(header_path, header), _secure_temp(label_path, label)]
-        backups = [_backup(header_path), _backup(label_path)]
+        for target, content in ((header_path, header), (label_path, label)):
+            temps.append(_secure_temp(target, content))
+        for target in (header_path, label_path):
+            backups.append(_backup(target))
         # Both complete files exist before either public output is replaced.
         os.replace(temps[0], header_path); temps[0] = None; installed.append(header_path)
         os.replace(temps[1], label_path); temps[1] = None; installed.append(label_path)

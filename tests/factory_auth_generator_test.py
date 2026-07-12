@@ -110,6 +110,43 @@ class FactoryAuthGeneratorTest(unittest.TestCase):
                     GENERATOR._secure_temp(directory / "factory.h", "contents")
             self.assertEqual([], list(directory.iterdir()))
 
+    def test_second_temp_creation_failure_cleans_first_temp(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            real_temp = GENERATOR._secure_temp
+            calls = 0
+            def fail_second(target, content):
+                nonlocal calls
+                calls += 1
+                if calls == 2: raise OSError("second temp failed")
+                return real_temp(target, content)
+            with mock.patch.object(GENERATOR, "_secure_temp", side_effect=fail_second):
+                with self.assertRaisesRegex(OSError, "second temp failed"):
+                    GENERATOR.generate_files("K10-TEMP", directory / "factory.h",
+                                             directory / "label.txt", 120000, False)
+            self.assertEqual([], list(directory.iterdir()))
+
+    def test_second_backup_failure_cleans_artifacts_and_preserves_originals(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            header, label = directory / "factory.h", directory / "label.txt"
+            header.write_bytes(b"original-header")
+            label.write_bytes(b"original-label")
+            real_backup = GENERATOR._backup
+            calls = 0
+            def fail_second(target):
+                nonlocal calls
+                calls += 1
+                if calls == 2: raise OSError("second backup failed")
+                return real_backup(target)
+            with mock.patch.object(GENERATOR, "_backup", side_effect=fail_second):
+                with self.assertRaisesRegex(OSError, "second backup failed"):
+                    GENERATOR.generate_files("K10-BACKUP", header, label, 120000, True)
+            self.assertEqual(b"original-header", header.read_bytes())
+            self.assertEqual(b"original-label", label.read_bytes())
+            self.assertEqual([], list(directory.glob("*.tmp")))
+            self.assertEqual([], list(directory.glob("*.bak")))
+
 
 if __name__ == "__main__":
     unittest.main()
