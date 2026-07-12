@@ -21,6 +21,7 @@
 9. [OTA Firmware Updates](#9-ota-firmware-updates)
 10. [Troubleshooting](#10-troubleshooting)
 11. [Technical Details](#11-technical-details)
+12. [Authentication and Provisioning](#12-authentication-and-provisioning)
 
 ---
 
@@ -414,14 +415,18 @@ Saved to Preferences namespace `cal`, keys `titrant_gps` and `sample_gps`.
 
 The project uses a custom 16 MB partition table (`partitions.csv`) with dual OTA app partitions (~6.5 MB each) to support large firmware updates.
 
----
+## 12. Authentication and provisioning
 
-*Document version: matches firmware `codex/ph-titrator` branch.*
-
-### Authentication, recovery, and provisioning
+### Login and recovery
 
 The first administrator signs in with the device-specific factory password on the private label and sets an administrator password. Logout invalidates the current session; otherwise it expires after 30 minutes without a successful authenticated write. Forgotten passwords can only be recovered in the Web interface using the factory label. Recovery stops both pumps, clears sessions and run data, and enters `SetupMode`.
 
 Control, settings, recovery, logout, and OTA are authenticated POST-only operations, so legacy GET-based integrations must migrate. Supply the logged-in session token to OTA with `--token` (Python) or `-Token` (PowerShell); it is sent as `X-Session-Token` and must never be logged.
 
+### Manufacturing and network security
+
 For manufacturing, generate a unique header/label pair per serial number, compile that header into only its matching unit, apply and protect the label, then securely delete the generated files. HTTP remains local-network plaintext and cannot defeat packet sniffing; operate through the device AP or a trusted LAN.
+
+---
+
+*Document version: matches firmware `codex/ph-titrator` branch.*

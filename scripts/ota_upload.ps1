@@ -21,6 +21,6 @@ try {
         exit 1
     }
 } catch {
-    Write-Host "Error: $_"
+    Write-Host "Error: OTA request failed."
     exit 1
 }

@@ -43,8 +43,8 @@ def upload(ip: str, bin_path: str, token: str) -> bool:
             else:
                 print("OTA upload failed.")
                 return False
-    except Exception as e:
-        print(f"Error: {e}")
+    except Exception:
+        print("Error: OTA request failed.")
         return False
 
 

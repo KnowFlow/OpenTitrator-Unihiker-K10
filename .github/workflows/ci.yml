@@ -58,5 +58,6 @@ jobs:
         shell: pwsh
         run: |
           python -m unittest tests.factory_auth_generator_test tests.ota_upload_script_test
+          ./tests/ota_upload_script_test.ps1
           ./tests/web_auth_static_test.ps1
           ./tests/sketch_safety_static_test.ps1
