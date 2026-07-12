@@ -177,4 +177,14 @@ scripts/
 
 ## License
 
+## Web authentication and provisioning
+
+On first setup, sign in with the unique factory password printed on the device label and choose the administrator password. Keep the label private for Web-only password recovery; recovery stops both pumps, clears active sessions, and returns the instrument to `SetupMode`. Log out on shared computers. Sessions expire after 30 minutes without a successful authenticated write.
+
+All control and settings integrations now use authenticated `POST` requests; legacy `GET` integrations are incompatible. OTA also requires a current session token: `python scripts/ota_upload.py firmware.bin --ip DEVICE_IP --token SESSION_TOKEN` or `.\scripts\ota_upload.ps1 -Bin firmware.bin -Ip DEVICE_IP -Token SESSION_TOKEN`. The helpers send the token in `X-Session-Token` and do not print it.
+
+Manufacturing must run `generate_factory_auth.py` once per device, compile its generated header into that device only, attach the matching label, and delete both generated artifacts after the build. Never reuse or commit credentials or labels.
+
+HTTP authentication remains plaintext on the local network and does not protect against a packet sniffer. Use the device AP or a trusted LAN.
+
 MIT — see repository for details.

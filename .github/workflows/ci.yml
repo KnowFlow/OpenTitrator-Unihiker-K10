@@ -49,5 +49,14 @@ jobs:
 
       - name: Build and run control logic tests
         run: |
-          g++ -std=c++17 -Wall -Wextra tests/ph_titrator_control_test.cpp -o control_test
+          g++ -std=c++17 -Wall -Wextra -pedantic tests/ph_titrator_control_test.cpp -o control_test
           ./control_test
+          g++ -std=c++17 -Wall -Wextra -pedantic tests/auth_core_test.cpp ph_titrator/auth_core.cpp -o auth_core_test
+          ./auth_core_test
+
+      - name: Run generator and static tests
+        shell: pwsh
+        run: |
+          python -m unittest tests.factory_auth_generator_test tests.ota_upload_script_test
+          ./tests/web_auth_static_test.ps1
+          ./tests/sketch_safety_static_test.ps1

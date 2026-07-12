@@ -417,3 +417,11 @@ The project uses a custom 16 MB partition table (`partitions.csv`) with dual OTA
 ---
 
 *Document version: matches firmware `codex/ph-titrator` branch.*
+
+### Authentication, recovery, and provisioning
+
+The first administrator signs in with the device-specific factory password on the private label and sets an administrator password. Logout invalidates the current session; otherwise it expires after 30 minutes without a successful authenticated write. Forgotten passwords can only be recovered in the Web interface using the factory label. Recovery stops both pumps, clears sessions and run data, and enters `SetupMode`.
+
+Control, settings, recovery, logout, and OTA are authenticated POST-only operations, so legacy GET-based integrations must migrate. Supply the logged-in session token to OTA with `--token` (Python) or `-Token` (PowerShell); it is sent as `X-Session-Token` and must never be logged.
+
+For manufacturing, generate a unique header/label pair per serial number, compile that header into only its matching unit, apply and protect the label, then securely delete the generated files. HTTP remains local-network plaintext and cannot defeat packet sniffing; operate through the device AP or a trusted LAN.

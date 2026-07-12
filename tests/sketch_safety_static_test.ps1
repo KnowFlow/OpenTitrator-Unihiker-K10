@@ -15,6 +15,13 @@ Assert-Match 'if \(methodChanged \|\| methodFieldChanged \|\| endpointChanged\) 
 Assert-Match 'void handleButton\(ButtonEvent event\) \{[\s\S]*?if \(httpOtaSafetyLock\) \{\s*if \(event == ButtonEvent::ABLong\) \{\s*pump\.stop\(\);\s*samplePump\.stop\(\);\s*\}\s*return;' 'buttons preserve OTA state and lock while allowing emergency pump stop'
 Assert-Match 'if \(cmd == "reset" && !httpOtaInProgress && !httpOtaSucceeded\)' 'Web reset clears only a terminal failed OTA lock'
 
+$PythonUploader = Get-Content (Join-Path $PSScriptRoot '..\scripts\ota_upload.py') -Raw
+if ($PythonUploader -notmatch 'headers=\{[\s\S]*?"X-Session-Token": token') { throw 'FAIL: Python OTA uploader must send X-Session-Token' }
+if ($PythonUploader -notmatch 'add_argument\("--token", required=True') { throw 'FAIL: Python OTA uploader must require --token' }
+$PowerShellUploader = Get-Content (Join-Path $PSScriptRoot '..\scripts\ota_upload.ps1') -Raw
+if ($PowerShellUploader -notmatch '\[Parameter\(Mandatory=\$true\)\][\s\S]*?\[string\]\$Token') { throw 'FAIL: PowerShell OTA uploader must require -Token' }
+if ($PowerShellUploader -notmatch '"X-Session-Token"\s*=\s*\$Token') { throw 'FAIL: PowerShell OTA uploader must send X-Session-Token' }
+
 $start = [regex]::Match($sketch, 'bool startTitration\(\) \{([\s\S]*?)\n\}')
 if (-not $start.Success) { throw 'FAIL: startTitration not found' }
 $resetCount = ([regex]::Matches($start.Groups[1].Value, 'endpointHold\.reset\(\);')).Count

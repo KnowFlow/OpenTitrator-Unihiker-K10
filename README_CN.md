@@ -175,4 +175,14 @@ scripts/
 
 ## 许可证
 
+## 网页认证与生产配置
+
+首次设置时，用设备标签上的唯一出厂密码登录并设置管理员密码。标签应保密，仅用于网页密码恢复；恢复会停止两台泵、清除所有会话并返回 `SetupMode`。共用电脑使用后请退出。若 30 分钟内没有成功的认证写操作，会话自动失效。
+
+控制和设置接口现在仅接受带认证的 `POST`；旧版 `GET` 集成不兼容。OTA 同样需要当前会话令牌：`python scripts/ota_upload.py firmware.bin --ip DEVICE_IP --token SESSION_TOKEN` 或 `.\scripts\ota_upload.ps1 -Bin firmware.bin -Ip DEVICE_IP -Token SESSION_TOKEN`。脚本通过 `X-Session-Token` 请求头发送令牌且不会打印令牌。
+
+生产时必须为每台设备单独运行 `generate_factory_auth.py`，只把对应生成头文件编译进该设备，贴上匹配标签，构建后删除两个生成文件。不得复用或提交凭据和标签。
+
+HTTP 认证在本地网络中仍是明文，无法防御网络抓包。请使用设备自身 AP 或可信局域网。
+
 MIT — 详见仓库。

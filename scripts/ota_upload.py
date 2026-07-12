@@ -6,7 +6,7 @@ import sys
 import urllib.request
 
 
-def upload(ip: str, bin_path: str) -> bool:
+def upload(ip: str, bin_path: str, token: str) -> bool:
     url = f"http://{ip}/ota"
     print(f"Uploading {bin_path} to {url} ...")
 
@@ -28,6 +28,7 @@ def upload(ip: str, bin_path: str) -> bool:
         headers={
             "Content-Type": f"multipart/form-data; boundary={boundary}",
             "Connection": "close",
+            "X-Session-Token": token,
         },
         method="POST",
     )
@@ -51,9 +52,10 @@ def main():
     parser = argparse.ArgumentParser(description="K10 pH Titrator OTA Uploader")
     parser.add_argument("bin", help="Path to .bin firmware file")
     parser.add_argument("--ip", default="192.168.9.42", help="Device IP address")
+    parser.add_argument("--token", required=True, help="Authenticated Web session token")
     args = parser.parse_args()
 
-    if not upload(args.ip, args.bin):
+    if not upload(args.ip, args.bin, args.token):
         sys.exit(1)
 
 
