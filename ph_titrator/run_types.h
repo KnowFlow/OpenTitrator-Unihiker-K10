@@ -88,6 +88,7 @@ struct SensorSnapshot {
 
 struct RunContext {
   float targetSampleGrams = 0.0f;
+  float samplePumpFlowRateGps = 0.0f;
   float maximumTitrantGrams = 0.0f;
   uint32_t maximumRunMs = 0U;
   bool otaLocked = false;

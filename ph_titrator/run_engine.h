@@ -14,6 +14,11 @@ public:
 private:
   RunPhase phase_;
   RunStopReason stopReason_;
+  RunPhase pausedPhase_;
+  uint32_t fillStartedAtMs_;
+  uint32_t lastSampleProgressAtMs_;
+  float lastSampleProgressGrams_;
+  bool reStabilizingAfterResume_;
 };
 
 #endif
