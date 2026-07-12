@@ -1,4 +1,8 @@
 #include "../ph_titrator/auth_core.h"
+
+struct AuthManagerTestAccess {
+  static void forceSerial(AuthManager &auth, uint32_t serial) { auth.serial_ = serial; }
+};
 #include "../ph_titrator/command_admission.h"
 
 #include <cstdio>
@@ -221,6 +225,23 @@ static void testCommandAdmissionPolicy() {
   CHECK(admitWebCommand(WebCommand::Recover, otaInProgress) == AdmissionResult::OtaLocked);
 }
 
+static void testLruSerialWrapPreservesRecency() {
+  FakeCrypto crypto;
+  AuthManager auth(crypto);
+  auth.setAdministratorCredential(credential(crypto, "correct-password"));
+  char first[33], second[33], third[33];
+  CHECK(auth.login("correct-password", 16, 1, first) == AuthResult::Ok);
+  CHECK(auth.login("correct-password", 16, 2, second) == AuthResult::Ok);
+  AuthManagerTestAccess::forceSerial(auth, UINT32_MAX - 1U);
+  uint8_t slot = 0;
+  CHECK(auth.validateSession(first, 3, slot) == AuthResult::Ok);
+  CHECK(auth.validateSession(second, 4, slot) == AuthResult::Ok);
+  CHECK(auth.login("correct-password", 16, 5, third) == AuthResult::Ok);
+  CHECK(auth.validateSession(first, 6, slot) == AuthResult::Required);
+  CHECK(auth.validateSession(second, 6, slot) == AuthResult::Ok);
+  CHECK(auth.validateSession(third, 6, slot) == AuthResult::Ok);
+}
+
 int main() {
   testPasswordLimitsAndVerification();
   testLoginLockout();
@@ -228,6 +249,7 @@ int main() {
   testMalformedTokens();
   testRecovery();
   testCommandAdmissionPolicy();
+  testLruSerialWrapPreservesRecency();
   if (failures != 0) return 1;
   std::puts("All auth core tests passed");
   return 0;

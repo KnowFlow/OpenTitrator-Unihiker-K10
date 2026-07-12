@@ -49,8 +49,20 @@ bool AuthManager::verify(const AuthCredential &credential, const char *password,
 }
 
 uint32_t AuthManager::nextSerial() {
+  if (serial_ == UINT32_MAX) {
+    uint8_t active[MaxSessions] = {};
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < MaxSessions; ++i)
+      if (sessions_[i].active) active[count++] = i;
+    if (count == 2 && sessions_[active[1]].lastUsedSerial <
+                          sessions_[active[0]].lastUsedSerial) {
+      const uint8_t swap = active[0]; active[0] = active[1]; active[1] = swap;
+    }
+    for (uint8_t rank = 0; rank < count; ++rank)
+      sessions_[active[rank]].lastUsedSerial = static_cast<uint32_t>(rank + 1U);
+    serial_ = count;
+  }
   ++serial_;
-  if (serial_ == 0) ++serial_;
   return serial_;
 }
 

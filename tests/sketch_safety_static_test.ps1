@@ -20,7 +20,8 @@ if ($PythonUploader -notmatch 'headers=\{[\s\S]*?"X-Session-Token": token') { th
 if ($PythonUploader -notmatch 'add_argument\("--token", required=True') { throw 'FAIL: Python OTA uploader must require --token' }
 $PowerShellUploader = Get-Content (Join-Path $PSScriptRoot '..\scripts\ota_upload.ps1') -Raw
 if ($PowerShellUploader -notmatch '\[Parameter\(Mandatory=\$true\)\][\s\S]*?\[string\]\$Token') { throw 'FAIL: PowerShell OTA uploader must require -Token' }
-if ($PowerShellUploader -notmatch '"X-Session-Token"\s*=\s*\$Token') { throw 'FAIL: PowerShell OTA uploader must send X-Session-Token' }
+if ($PowerShellUploader -notmatch 'TryAddWithoutValidation\("X-Session-Token",\s*\$Token\)') { throw 'FAIL: PowerShell OTA uploader must send X-Session-Token' }
+if ($PowerShellUploader -notmatch 'MultipartFormDataContent' -or $PowerShellUploader -notmatch '\.Name\s*=\s*''"file"''') { throw 'FAIL: PowerShell OTA uploader must send multipart file field' }
 
 $start = [regex]::Match($sketch, 'bool startTitration\(\) \{([\s\S]*?)\n\}')
 if (-not $start.Success) { throw 'FAIL: startTitration not found' }

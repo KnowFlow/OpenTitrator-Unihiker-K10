@@ -2432,6 +2432,8 @@ bool saveRecoveredCredential(void *context, const AuthCredential &credential) {
 
 void handleMethodNotAllowed() { sendApiError(405, "method_not_allowed", "POST required"); }
 void handlePanic() {
+  uint8_t sessionSlot;
+  if (!requireCommand(WebCommand::EmergencyStop, sessionSlot)) return;
   pump.stop();
   samplePump.stop();
   activePulseMs = 0;
@@ -2762,7 +2764,7 @@ void handleSet() {
     currentMethod = TitrationMethod::Manual;
   }
   String validationError;
-  if (!validateSettingsCandidate(candidate, validationError)) {
+  if (calibrationChanged && !validateSettingsCandidate(candidate, validationError)) {
     sendApiError(422, "invalid_settings", validationError); return;
   }
   commitSettingsCandidate(candidate);

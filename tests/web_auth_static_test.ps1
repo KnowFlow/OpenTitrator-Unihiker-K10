@@ -37,7 +37,7 @@ Need 'void handleSet\(\) \{\s*uint8_t sessionSlot;\s*if \(!requireCommand\(WebCo
 Need 'void handleAction\(\) \{[\s\S]*?String cmd = server\.arg\("cmd"\);[\s\S]*?requireCommand\(' '/action must parse then authenticate/admit'
 Need 'UPLOAD_FILE_START[\s\S]*?validateSession[\s\S]*?admitWebCommand\(WebCommand::OtaUpload[\s\S]*?enterHttpOtaSafety\(\)[\s\S]*?Update\.begin' 'OTA authentication/admission must precede safety and Update.begin'
 Need 'void handleRecover\(\) \{\s*pump\.stop\(\);\s*samplePump\.stop\(\);[\s\S]*?authManager\.recover[\s\S]*?resetRunData\(\);[\s\S]*?RunState::SetupMode' 'recovery ordering is unsafe'
-Need 'void handlePanic\(\) \{\s*pump\.stop\(\);\s*samplePump\.stop\(\);' 'anonymous panic must only stop pumps'
+Need 'void handlePanic\(\) \{\s*uint8_t sessionSlot;\s*if \(!requireCommand\(WebCommand::EmergencyStop, sessionSlot\)\) return;\s*pump\.stop\(\);\s*samplePump\.stop\(\);' 'anonymous panic must pass centralized emergency admission before stop-only action'
 Need 'bool otaUploadStartSeen = false;' 'OTA lifecycle must track a current start event'
 Need 'void clearOtaRequestState\(\)' 'OTA lifecycle needs one explicit clearing operation'
 Need 'void handleOta\(\) \{\s*if \(!otaUploadStartSeen \|\| !otaRequestAccepted\)' 'empty/malformed OTA requests must be rejected'
@@ -45,10 +45,10 @@ Need 'void handleOta\(\) \{[\s\S]*?clearOtaRequestState\(\);\s*\}' 'OTA final ha
 Need 'UPLOAD_FILE_START\) \{\s*clearOtaRequestState\(\);\s*otaUploadStartSeen = true;' 'each OTA start must reset stale authorization'
 Need 'UPLOAD_FILE_ABORTED\) \{[\s\S]*?clearOtaRequestState\(\);' 'OTA abort must clear request state'
 Need 'struct SettingsCandidate[\s\S]*?SettingsCandidate candidate =' '/set must stage request values'
-Need 'if \(!validateSettingsCandidate\(candidate' '/set must validate before commit'
+Need 'if \(calibrationChanged && !validateSettingsCandidate\(candidate' '/set must only validate calibration spans when calibration fields changed'
 Need 'commitSettingsCandidate\(candidate\);[\s\S]*?recordSuccessfulWrite' '/set must commit before refreshing session'
 Need 'resetFromHttpOtaFailure\(\);\s*authManager\.recordSuccessfulWrite\(sessionSlot, millis\(\)\);' 'successful terminal OTA reset must refresh session'
-$setBeforeValidation = [regex]::Match($sketch, 'void handleSet\(\) \{([\s\S]*?)if \(!validateSettingsCandidate\(candidate').Groups[1].Value
+$setBeforeValidation = [regex]::Match($sketch, 'void handleSet\(\) \{([\s\S]*?)if \(calibrationChanged && !validateSettingsCandidate\(candidate').Groups[1].Value
 if (-not $setBeforeValidation) { throw 'FAIL: could not inspect /set staging prefix' }
 if ($setBeforeValidation -cmatch 'save[A-Z]|setRunPulseUs|setCalibrationFactor|selectMethod|setState|resetRunData') {
   throw 'FAIL: /set performs a side effect before whole-request validation'

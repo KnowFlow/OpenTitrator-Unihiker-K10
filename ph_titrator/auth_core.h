@@ -35,6 +35,7 @@ struct AuthSession {
 using SaveCredentialFn = bool (*)(void *, const AuthCredential &);
 
 class AuthManager {
+  friend struct AuthManagerTestAccess;
 public:
   static constexpr uint32_t SessionIdleMs = 30UL * 60UL * 1000UL;
   static constexpr uint32_t LoginLockMs = 60UL * 1000UL;
