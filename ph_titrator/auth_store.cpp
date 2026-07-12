@@ -16,11 +16,12 @@ bool AuthStore::loadAdministrator(AuthCredential &out) {
   Preferences prefs;
   if (!prefs.begin("auth", true)) return false;
   AuthCredential value;
+  const uint8_t validMarker = prefs.getUChar("admin_valid", 0);
   value.version = prefs.getUChar("admin_ver", 0);
   value.iterations = prefs.getUInt("admin_iter", 0);
   const size_t salt = prefs.getBytesLength("admin_salt");
   const size_t hash = prefs.getBytesLength("admin_hash");
-  bool ok = value.version == 1 && value.iterations > 0 &&
+  bool ok = validMarker == 1 && value.version == 1 && value.iterations > 0 &&
             salt == AuthCredential::SaltBytes && hash == AuthCredential::HashBytes;
   if (ok) ok = prefs.getBytes("admin_salt", value.salt, sizeof value.salt) == sizeof value.salt &&
                prefs.getBytes("admin_hash", value.hash, sizeof value.hash) == sizeof value.hash;
@@ -33,10 +34,13 @@ bool AuthStore::saveAdministrator(const AuthCredential &value) {
   if (!value.valid || value.version != 1 || value.iterations == 0) return false;
   Preferences prefs;
   if (!prefs.begin("auth", false)) return false;
-  bool ok = prefs.putUChar("admin_ver", value.version) == sizeof(uint8_t) &&
+  // Invalidate first and publish validity last, so torn writes never authenticate.
+  bool ok = prefs.putUChar("admin_valid", 0) == sizeof(uint8_t) &&
+            prefs.putUChar("admin_ver", value.version) == sizeof(uint8_t) &&
             prefs.putUInt("admin_iter", value.iterations) == sizeof(uint32_t) &&
             prefs.putBytes("admin_salt", value.salt, sizeof value.salt) == sizeof value.salt &&
             prefs.putBytes("admin_hash", value.hash, sizeof value.hash) == sizeof value.hash;
+  if (ok) ok = prefs.putUChar("admin_valid", 1) == sizeof(uint8_t);
   prefs.end(); return ok;
 }
 

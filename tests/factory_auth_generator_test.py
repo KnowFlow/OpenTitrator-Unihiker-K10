@@ -3,10 +3,15 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+import importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "generate_factory_auth.py"
+SPEC = importlib.util.spec_from_file_location("factory_generator", SCRIPT)
+GENERATOR = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(GENERATOR)
 
 
 class FactoryAuthGeneratorTest(unittest.TestCase):
@@ -44,6 +49,36 @@ class FactoryAuthGeneratorTest(unittest.TestCase):
                                      "--label", str(directory / "label001.txt"),
                                      "--iterations", "120000"], capture_output=True)
             self.assertNotEqual(0, result.returncode)
+
+    def test_force_replaces_both_outputs_and_leaves_no_temps(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            self.generate(directory, "001")
+            old_header = (directory / "factory001.h").read_text()
+            result = subprocess.run([sys.executable, str(SCRIPT), "--device-id", "K10-001",
+                "--header", str(directory / "factory001.h"), "--label", str(directory / "label001.txt"),
+                "--iterations", "120000", "--force"])
+            self.assertEqual(0, result.returncode)
+            self.assertNotEqual(old_header, (directory / "factory001.h").read_text())
+            self.assertEqual([], list(directory.glob("*.tmp")))
+
+    def test_failure_cleans_temporary_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            real_replace = GENERATOR.os.replace
+            calls = 0
+            def fail_second(source, target):
+                nonlocal calls
+                calls += 1
+                if calls == 2: raise OSError("injected")
+                return real_replace(source, target)
+            with mock.patch.object(GENERATOR.os, "replace", side_effect=fail_second):
+                with self.assertRaises(OSError):
+                    GENERATOR.generate_files("K10-FAIL", directory / "factory.h",
+                                             directory / "label.txt", 120000, False)
+            self.assertEqual([], list(directory.glob("*.tmp")))
+            self.assertFalse((directory / "factory.h").exists())
+            self.assertFalse((directory / "label.txt").exists())
 
 
 if __name__ == "__main__":

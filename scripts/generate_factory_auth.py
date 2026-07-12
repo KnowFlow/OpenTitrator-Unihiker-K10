@@ -1,7 +1,53 @@
-import argparse, hashlib, secrets
+import argparse, hashlib, os, secrets, tempfile
 from pathlib import Path
 
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+def _secure_temp(target, content):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=target.parent)
+    try:
+        try: os.chmod(name, 0o600)
+        except OSError: pass
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        return Path(name)
+    except Exception:
+        os.close(fd)
+        Path(name).unlink(missing_ok=True)
+        raise
+
+def generate_files(device_id, header_path, label_path, iterations, force):
+    header_path, label_path = Path(header_path), Path(label_path)
+    if iterations <= 0: raise ValueError("iterations must be positive")
+    if not force and (header_path.exists() or label_path.exists()):
+        raise FileExistsError("refusing to overwrite output; use --force")
+    password = "".join(secrets.choice(ALPHABET) for _ in range(16))
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    def array(name, data):
+        return f"static constexpr uint8_t {name}[{len(data)}] = {{" + ", ".join(f"0x{x:02x}" for x in data) + "};\n"
+    header = ("#pragma once\n#include <stdint.h>\n"
+              "static constexpr uint8_t FACTORY_AUTH_VERSION = 1;\n"
+              f"static constexpr uint32_t FACTORY_AUTH_ITERATIONS = {iterations};\n"
+              + array("FACTORY_AUTH_SALT", salt) + array("FACTORY_AUTH_HASH", digest))
+    label = f"Device: {device_id}\nPassword: {password}\n"
+    temps = []
+    installed = []
+    try:
+        temps = [_secure_temp(header_path, header), _secure_temp(label_path, label)]
+        # Both complete files exist before either public output is replaced.
+        os.replace(temps[0], header_path); temps[0] = None; installed.append(header_path)
+        os.replace(temps[1], label_path); temps[1] = None; installed.append(label_path)
+        try: os.chmod(label_path, 0o600)
+        except OSError: pass
+    except Exception:
+        # Never leave only one member of a newly generated pair visible.
+        for output in installed: output.unlink(missing_ok=True)
+        raise
+    finally:
+        for temp in temps:
+            if temp: temp.unlink(missing_ok=True)
 
 def main():
     p = argparse.ArgumentParser()
@@ -11,21 +57,7 @@ def main():
     p.add_argument("--iterations", required=True, type=int)
     p.add_argument("--force", action="store_true")
     a = p.parse_args()
-    if a.iterations <= 0: p.error("iterations must be positive")
-    if not a.force and (a.header.exists() or a.label.exists()):
-        p.error("refusing to overwrite output; use --force")
-    password = "".join(secrets.choice(ALPHABET) for _ in range(16))
-    salt = secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, a.iterations)
-    def array(name, data):
-        return f"static constexpr uint8_t {name}[{len(data)}] = {{" + ", ".join(f"0x{x:02x}" for x in data) + "};\n"
-    header = ("#pragma once\n#include <stdint.h>\n"
-              "static constexpr uint8_t FACTORY_AUTH_VERSION = 1;\n"
-              f"static constexpr uint32_t FACTORY_AUTH_ITERATIONS = {a.iterations};\n"
-              + array("FACTORY_AUTH_SALT", salt) + array("FACTORY_AUTH_HASH", digest))
-    a.header.parent.mkdir(parents=True, exist_ok=True)
-    a.label.parent.mkdir(parents=True, exist_ok=True)
-    a.header.write_text(header, encoding="utf-8")
-    a.label.write_text(f"Device: {a.device_id}\nPassword: {password}\n", encoding="utf-8")
+    try: generate_files(a.device_id, a.header, a.label, a.iterations, a.force)
+    except (ValueError, FileExistsError) as error: p.error(str(error))
 
 if __name__ == "__main__": main()

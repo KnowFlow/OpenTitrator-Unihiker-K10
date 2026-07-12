@@ -30,7 +30,13 @@ jobs:
         run: pip install platformio
 
       - name: Build firmware
-        run: pio run --environment unihiker
+        shell: bash
+        run: |
+          trap 'rm -f ph_titrator/factory_auth.generated.h factory-label-ci.txt' EXIT
+          python scripts/generate_factory_auth.py --device-id CI-THROWAWAY \
+            --header ph_titrator/factory_auth.generated.h \
+            --label factory-label-ci.txt --iterations 120000
+          pio run --environment unihiker
 
   unit-tests:
     runs-on: ubuntu-latest
