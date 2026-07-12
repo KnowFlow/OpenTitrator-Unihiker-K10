@@ -8,12 +8,23 @@
 #include <ESP32Servo.h>
 #include "unihiker_k10.h"
 #include "control_logic.h"
+#include "auth_core.h"
+#include "auth_crypto_esp32.h"
+#include "auth_store.h"
+#include "command_admission.h"
 
 UNIHIKER_K10 k10;
 Servo titrantPumpServo;
 Servo samplePumpServo;
 WebServer server(80);
 Preferences preferences;
+Esp32AuthCrypto authCrypto;
+AuthStore authStore;
+AuthManager authManager(authCrypto);
+bool authStorageReady = false;
+bool otaRequestAccepted = false;
+uint8_t otaSessionSlot = 0;
+int otaRejectedStatus = 0;
 
 const uint8_t SCREEN_DIR = 2;
 const uint8_t ADS1115_ADDR = 0x49;
@@ -2370,13 +2381,104 @@ void handleRoot() {
   server.send(200, "text/html", htmlPage());
 }
 
-void handleSet() {
-  if (httpOtaSafetyLock) {
-    statusLine = httpOtaInProgress ? "OTA in progress" : "OTA failed: reset required";
-    displayDirty = true;
-    redirectHomeTab("admin");
-    return;
+void sendApiError(int status, const char *code, const String &message) {
+  server.send(status, "application/json", String("{\"ok\":false,\"error\":\"") +
+      jsonEscape(code) + "\",\"message\":\"" + jsonEscape(message) + "\"}");
+}
+
+bool readSessionToken(char out[33]) {
+  String token = server.header("X-Session-Token");
+  if (token.length() != 32) return false;
+  memcpy(out, token.c_str(), 32); out[32] = '\0'; return true;
+}
+
+bool requireSession(uint8_t &slot, bool refreshAfterSuccess = false) {
+  (void)refreshAfterSuccess;
+  char token[33];
+  if (!authStorageReady || !readSessionToken(token)) {
+    sendApiError(401, "authentication_required", "Authentication required"); return false;
   }
+  AuthResult result = authManager.validateSession(token, millis(), slot);
+  memset(token, 0, sizeof token);
+  if (result != AuthResult::Ok) {
+    sendApiError(401, result == AuthResult::Expired ? "session_expired" : "authentication_required",
+                 result == AuthResult::Expired ? "Session expired" : "Authentication required");
+    return false;
+  }
+  return true;
+}
+
+AdmissionContext admissionRunState(bool authenticated) {
+  AdmissionContext context = {authenticated, httpOtaSafetyLock, httpOtaInProgress,
+                              isActiveState(), state == RunState::Calibrating};
+  return context;
+}
+
+bool requireCommand(WebCommand command, uint8_t &sessionSlot) {
+  bool anonymousEmergency = command == WebCommand::EmergencyStop;
+  if (!anonymousEmergency && !requireSession(sessionSlot)) return false;
+  AdmissionResult result = admitWebCommand(command, admissionRunState(!anonymousEmergency));
+  if (result == AdmissionResult::Allowed) return true;
+  sendApiError(result == AdmissionResult::AuthenticationRequired ? 401 : 403,
+               result == AdmissionResult::OtaLocked ? "ota_locked" : "invalid_state", "Command rejected");
+  return false;
+}
+
+bool saveRecoveredCredential(void *context, const AuthCredential &credential) {
+  return static_cast<AuthStore *>(context)->saveAdministrator(credential);
+}
+
+void handleMethodNotAllowed() { sendApiError(405, "method_not_allowed", "POST required"); }
+void handlePanic() {
+  pump.stop();
+  samplePump.stop();
+  activePulseMs = 0;
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleLogin() {
+  AdmissionResult admission = admitWebCommand(WebCommand::Login, admissionRunState(false));
+  if (admission != AdmissionResult::Allowed) { sendApiError(403, "ota_locked", "Login unavailable"); return; }
+  if (!authStorageReady || !server.hasArg("password")) { sendApiError(401, "invalid_credentials", "Invalid credentials"); return; }
+  String password = server.arg("password"); char token[33] = {};
+  AuthResult result = authManager.login(password.c_str(), password.length(), millis(), token);
+  password = "";
+  if (result == AuthResult::RateLimited) { sendApiError(429, "rate_limited", "Try again later"); return; }
+  if (result != AuthResult::Ok) { sendApiError(401, "invalid_credentials", "Invalid credentials"); return; }
+  server.send(200, "application/json", String("{\"ok\":true,\"token\":\"") + token + "\"}");
+  memset(token, 0, sizeof token);
+}
+
+void handleLogout() {
+  uint8_t slot; if (!requireCommand(WebCommand::Logout, slot)) return;
+  char token[33]; if (!readSessionToken(token)) return;
+  authManager.logout(token); memset(token, 0, sizeof token);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleRecover() {
+  pump.stop();
+  samplePump.stop();
+  AdmissionResult admission = admitWebCommand(WebCommand::Recover, admissionRunState(false));
+  if (admission != AdmissionResult::Allowed) { sendApiError(403, "ota_locked", "Recovery unavailable"); return; }
+  if (!authStorageReady || !server.hasArg("factory_password") || !server.hasArg("new_password")) {
+    sendApiError(401, "recovery_failed", "Recovery failed"); return;
+  }
+  String factoryPassword = server.arg("factory_password"), newPassword = server.arg("new_password");
+  AuthResult result = authManager.recover(factoryPassword.c_str(), factoryPassword.length(),
+      newPassword.c_str(), newPassword.length(), millis(), saveRecoveredCredential, &authStore);
+  factoryPassword = ""; newPassword = "";
+  if (result == AuthResult::RateLimited) { sendApiError(429, "rate_limited", "Try again later"); return; }
+  if (result != AuthResult::Ok) { sendApiError(result == AuthResult::StorageError ? 500 : 401, "recovery_failed", "Recovery failed"); return; }
+  authManager.clearSessions();
+  resetRunData();
+  setState(RunState::SetupMode, "Recovered");
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleSet() {
+  uint8_t sessionSlot;
+  if (!requireCommand(WebCommand::SaveMethodSettings, sessionSlot)) return;
 
   bool wifiChanged = false;
   bool endpointChanged = false;
@@ -2623,6 +2725,7 @@ void handleSet() {
   }
   statusLine = wifiChanged ? "WiFi saved" : (calibrationChanged ? "Calibration saved" : (methodChanged ? "Method loaded" : "Settings saved"));
   displayDirty = true;
+  authManager.recordSuccessfulWrite(sessionSlot, millis());
   redirectHomeTab(calibrationChanged ? "cal" : "admin");
   if (wifiChanged) {
     pump.stop();
@@ -2634,6 +2737,25 @@ void handleSet() {
 void handleAction() {
   updatePumpTimeouts();
   String cmd = server.arg("cmd");
+  WebCommand command;
+  bool known = true;
+  if (cmd == "panic") command = WebCommand::EmergencyStop;
+  else if (cmd == "start") command = WebCommand::Start;
+  else if (cmd == "start_existing") command = WebCommand::StartExisting;
+  else if (cmd == "stop") command = WebCommand::Pause;
+  else if (cmd == "tare" || cmd == "scale_calibrate") command = WebCommand::Tare;
+  else if (cmd == "reset") command = WebCommand::Reset;
+  else if (cmd == "ready") command = WebCommand::EnterReady;
+  else if (cmd == "calibrate") command = WebCommand::CalibratePumps;
+  else if (cmd == "ph_signal_calibrate") command = WebCommand::ResetSignalFilter;
+  else if (cmd == "manual_titrant") command = WebCommand::ManualTitrant;
+  else if (cmd == "manual_sample") command = WebCommand::ManualSample;
+  else if (cmd.startsWith("manual_sweep") || cmd == "manual_capture_sweep") command = WebCommand::ManualSweep;
+  else if (cmd == "manual_stop") command = WebCommand::ManualStop;
+  else known = false;
+  if (!known) { sendApiError(400, "unknown_command", "Unknown command"); return; }
+  uint8_t sessionSlot = 0;
+  if (!requireCommand(command, sessionSlot)) return;
   if (httpOtaSafetyLock) {
     if (cmd == "reset" && !httpOtaInProgress && !httpOtaSucceeded) {
       resetFromHttpOtaFailure();
@@ -2792,6 +2914,7 @@ void handleAction() {
     displayDirty = true;
   }
   updatePumpTimeouts();
+  if (command != WebCommand::EmergencyStop) authManager.recordSuccessfulWrite(sessionSlot, millis());
   if (server.hasArg("ajax")) {
     String json = "{\"ok\":true,\"tab\":\"";
     json += returnTab;
@@ -2926,10 +3049,16 @@ void resetFromHttpOtaFailure() {
 }
 
 void handleOta() {
+  if (!otaRequestAccepted) {
+    sendApiError(otaRejectedStatus ? otaRejectedStatus : 401,
+                 otaRejectedStatus == 403 ? "ota_locked" : "authentication_required", "OTA rejected");
+    otaRejectedStatus = 0; return;
+  }
   bool success = httpOtaSucceeded && !httpOtaInProgress;
   server.sendHeader("Connection", "close");
   server.send(success ? 200 : 500, "text/plain", success ? "OK" : "FAIL");
   if (success) {
+    authManager.recordSuccessfulWrite(otaSessionSlot, millis());
     httpOtaSafetyLock = true;
     scheduleRestart("OTA update done");
   } else {
@@ -2940,6 +3069,17 @@ void handleOta() {
 void handleOtaUpload() {
   HTTPUpload &upload = server.upload();
   if (upload.status == UPLOAD_FILE_START) {
+    otaRequestAccepted = false; otaRejectedStatus = 401;
+    char token[33]; uint8_t slot = 0;
+    if (authStorageReady && readSessionToken(token) &&
+        authManager.validateSession(token, millis(), slot) == AuthResult::Ok) {
+      AdmissionResult admission = admitWebCommand(WebCommand::OtaUpload, admissionRunState(true));
+      if (admission == AdmissionResult::Allowed) {
+        otaRequestAccepted = true; otaSessionSlot = slot;
+      } else otaRejectedStatus = 403;
+    }
+    memset(token, 0, sizeof token);
+    if (!otaRequestAccepted) return;
     enterHttpOtaSafety();
     Serial.printf("OTA: %s\n", upload.filename.c_str());
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
@@ -2947,11 +3087,13 @@ void handleOtaUpload() {
       failHttpOta("OTA start failed");
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (!otaRequestAccepted) return;
     if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
       Update.printError(Serial);
       failHttpOta("OTA write failed");
     }
   } else if (upload.status == UPLOAD_FILE_END) {
+    if (!otaRequestAccepted) return;
     httpOtaInProgress = false;
     if (Update.end(true)) {
       httpOtaSucceeded = true;
@@ -2962,6 +3104,7 @@ void handleOtaUpload() {
     }
     displayDirty = true;
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    if (!otaRequestAccepted) return;
     Update.abort();
     failHttpOta("OTA aborted");
   }
@@ -2992,10 +3135,18 @@ void startNetwork() {
   }
 
   server.on("/", handleRoot);
-  server.on("/set", handleSet);
-  server.on("/action", handleAction);
+  server.on("/set", HTTP_POST, handleSet);
+  server.on("/set", HTTP_GET, handleMethodNotAllowed);
+  server.on("/action", HTTP_POST, handleAction);
+  server.on("/action", HTTP_GET, handleMethodNotAllowed);
+  server.on("/panic", HTTP_POST, handlePanic);
+  server.on("/login", HTTP_POST, handleLogin);
+  server.on("/logout", HTTP_POST, handleLogout);
+  server.on("/recover", HTTP_POST, handleRecover);
   server.on("/json", handleJson);
   server.on("/ota", HTTP_POST, handleOta, handleOtaUpload);
+  const char *headerKeys[] = {"X-Session-Token"};
+  server.collectHeaders(headerKeys, 1);
   server.begin();
   webReady = true;
 
@@ -3213,6 +3364,12 @@ void drawDisplay() {
 
 void setup() {
   Serial.begin(115200);
+  AuthCredential factoryCredential, administratorCredential;
+  bool factoryLoaded = authStore.loadFactory(factoryCredential);
+  bool administratorLoaded = authStore.loadAdministrator(administratorCredential);
+  authStorageReady = factoryLoaded;
+  if (factoryLoaded) authManager.setFactoryCredential(factoryCredential);
+  if (administratorLoaded) authManager.setAdministratorCredential(administratorCredential);
   loadWifiSettings();
   startNetwork();
 

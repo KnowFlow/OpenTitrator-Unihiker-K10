@@ -10,7 +10,7 @@ function Assert-Match([string]$Pattern, [string]$Message) {
 }
 
 Assert-Match 'void setState\(RunState next, const String &status\) \{\s*if \(next == RunState::Error\) \{\s*endpointHold\.reset\(\);' 'every Error transition resets endpoint hold'
-Assert-Match 'void handleSet\(\) \{\s*if \(httpOtaSafetyLock\) \{[\s\S]*?redirectHomeTab\("admin"\);\s*return;\s*\}' 'OTA lock rejects all /set mutations before parsing fields'
+Assert-Match 'void handleSet\(\) \{\s*uint8_t sessionSlot;\s*if \(!requireCommand\(WebCommand::SaveMethodSettings, sessionSlot\)\)' 'authentication and admission reject /set before parsing fields'
 Assert-Match 'if \(methodChanged \|\| methodFieldChanged \|\| endpointChanged\) \{\s*endpointHold\.reset\(\);\s*\}' 'method, endpoint, or control workflow changes reset endpoint hold'
 Assert-Match 'void handleButton\(ButtonEvent event\) \{[\s\S]*?if \(httpOtaSafetyLock\) \{\s*if \(event == ButtonEvent::ABLong\) \{\s*pump\.stop\(\);\s*samplePump\.stop\(\);\s*\}\s*return;' 'buttons preserve OTA state and lock while allowing emergency pump stop'
 Assert-Match 'if \(cmd == "reset" && !httpOtaInProgress && !httpOtaSucceeded\)' 'Web reset clears only a terminal failed OTA lock'
