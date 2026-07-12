@@ -80,6 +80,36 @@ class FactoryAuthGeneratorTest(unittest.TestCase):
             self.assertFalse((directory / "factory.h").exists())
             self.assertFalse((directory / "label.txt").exists())
 
+    def test_force_failure_restores_preexisting_pair(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            header, label = directory / "factory.h", directory / "label.txt"
+            header.write_bytes(b"original-header\x00")
+            label.write_bytes(b"original-label\x00")
+            real_replace = GENERATOR.os.replace
+            publications = 0
+            def fail_second_publication(source, target):
+                nonlocal publications
+                if Path(target) in (header, label):
+                    publications += 1
+                    if publications == 2: raise OSError("injected publication failure")
+                return real_replace(source, target)
+            with mock.patch.object(GENERATOR.os, "replace", side_effect=fail_second_publication):
+                with self.assertRaisesRegex(OSError, "injected publication failure"):
+                    GENERATOR.generate_files("K10-FORCE", header, label, 120000, True)
+            self.assertEqual(b"original-header\x00", header.read_bytes())
+            self.assertEqual(b"original-label\x00", label.read_bytes())
+            self.assertEqual([], list(directory.glob("*.tmp")))
+            self.assertEqual([], list(directory.glob("*.bak")))
+
+    def test_secure_temp_write_failure_is_not_masked_and_cleans_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            with mock.patch.object(GENERATOR.os, "fdopen", side_effect=RuntimeError("write failed")):
+                with self.assertRaisesRegex(RuntimeError, "write failed"):
+                    GENERATOR._secure_temp(directory / "factory.h", "contents")
+            self.assertEqual([], list(directory.iterdir()))
+
 
 if __name__ == "__main__":
     unittest.main()
