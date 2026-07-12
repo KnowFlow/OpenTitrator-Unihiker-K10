@@ -377,6 +377,33 @@ int main() {
   }
 
   {
+    RunEngine negativeTargetEngine;
+    RunInput start = startNormal(10.0f, 100U);
+    start.context.samplePumpFlowRateGps = 1.0f;
+    negativeTargetEngine.step(start);
+
+    const float negativeTargetGrams = -4.167f;
+    RunOutput beforeProgressTimeout = negativeTargetEngine.step(
+        fillingTick(12099U, negativeTargetGrams, 1.0f, -5.0f));
+    expectEqual(
+        beforeProgressTimeout.phase,
+        RunPhase::SampleFilling,
+        "negative later target leaves only the progress guard before its deadline");
+
+    RunOutput progressTimeout = negativeTargetEngine.step(
+        fillingTick(12100U, negativeTargetGrams, 1.0f, -5.0f));
+    expectEqual(
+        progressTimeout.phase,
+        RunPhase::Error,
+        "negative later target retains the progress guard at its deadline");
+    expectEqual(
+        progressTimeout.status,
+        RunStatusCode::SampleProgressTimeout,
+        "negative later target does not create a fill-duration timeout");
+    expectPumpsStopped(progressTimeout);
+  }
+
+  {
     RunEngine exactProgressEngine;
     RunInput start = startNormal(10.0f, 100U);
     exactProgressEngine.step(start);

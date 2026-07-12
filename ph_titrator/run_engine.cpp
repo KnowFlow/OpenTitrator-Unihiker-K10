@@ -25,14 +25,11 @@ bool maximumFillDurationMs(const RunContext &context, uint32_t &durationMs) {
       (context.targetSampleGrams / context.samplePumpFlowRateGps) *
           kSampleFillDurationMultiplierMs +
       kSampleFillAllowanceMs;
-  if (!std::isfinite(computedDurationMs)) {
+  if (!std::isfinite(computedDurationMs) || computedDurationMs < 0.0f ||
+      computedDurationMs >= kMaximumUint32AsFloat) {
     return false;
   }
-  if (computedDurationMs >= kMaximumUint32AsFloat) {
-    durationMs = UINT32_MAX;
-  } else {
-    durationMs = static_cast<uint32_t>(computedDurationMs);
-  }
+  durationMs = static_cast<uint32_t>(computedDurationMs);
   return true;
 }
 
