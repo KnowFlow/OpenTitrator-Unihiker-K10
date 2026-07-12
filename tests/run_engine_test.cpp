@@ -404,6 +404,60 @@ int main() {
   }
 
   {
+    RunEngine oversizedDurationEngine;
+    RunInput start = startNormal(10.0f, 100U);
+    start.context.samplePumpFlowRateGps = 1.0f;
+    oversizedDurationEngine.step(start);
+
+    const float targetWithOversizedDurationGrams = 4000000.0f;
+    RunOutput beforeProgressTimeout = oversizedDurationEngine.step(
+        fillingTick(12099U, targetWithOversizedDurationGrams, 1.0f, 0.0f));
+    expectEqual(
+        beforeProgressTimeout.phase,
+        RunPhase::SampleFilling,
+        "out-of-range fill duration leaves only the progress guard before its deadline");
+
+    RunOutput progressTimeout = oversizedDurationEngine.step(
+        fillingTick(12100U, targetWithOversizedDurationGrams, 1.0f, 0.0f));
+    expectEqual(
+        progressTimeout.phase,
+        RunPhase::Error,
+        "out-of-range fill duration retains the progress guard at its deadline");
+    expectEqual(
+        progressTimeout.status,
+        RunStatusCode::SampleProgressTimeout,
+        "out-of-range fill duration does not create a fill-duration timeout");
+    expectPumpsStopped(progressTimeout);
+  }
+
+  {
+    RunEngine nonFiniteDurationEngine;
+    RunInput start = startNormal(10.0f, 100U);
+    start.context.samplePumpFlowRateGps = 1.0f;
+    nonFiniteDurationEngine.step(start);
+
+    const float nonFiniteTargetGrams = std::numeric_limits<float>::infinity();
+    RunOutput beforeProgressTimeout = nonFiniteDurationEngine.step(
+        fillingTick(12099U, nonFiniteTargetGrams, 1.0f, 0.0f));
+    expectEqual(
+        beforeProgressTimeout.phase,
+        RunPhase::SampleFilling,
+        "non-finite fill duration leaves only the progress guard before its deadline");
+
+    RunOutput progressTimeout = nonFiniteDurationEngine.step(
+        fillingTick(12100U, nonFiniteTargetGrams, 1.0f, 0.0f));
+    expectEqual(
+        progressTimeout.phase,
+        RunPhase::Error,
+        "non-finite fill duration retains the progress guard at its deadline");
+    expectEqual(
+        progressTimeout.status,
+        RunStatusCode::SampleProgressTimeout,
+        "non-finite fill duration does not create a fill-duration timeout");
+    expectPumpsStopped(progressTimeout);
+  }
+
+  {
     RunEngine exactProgressEngine;
     RunInput start = startNormal(10.0f, 100U);
     exactProgressEngine.step(start);
