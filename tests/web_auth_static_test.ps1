@@ -9,15 +9,25 @@ Reject 'X-Session-Token[''"]?\s*\+|[?&](token|session)=' 'session tokens must ne
 Need "sessionStorage\.getItem\('k10_session'\)" 'browser session must be kept in sessionStorage'
 Need "headers\['X-Session-Token'\]=token" 'browser mutations must use the session header'
 foreach ($id in 'loginForm','logoutButton','recoveryForm') { Need ("id='" + $id + "'") "missing browser authentication control $id" }
+foreach ($id in 'loginForm','recoveryForm') {
+  Reject ("<form[^>]*id='" + $id + "'") "$id must not have a native submission path"
+  Need ("<div id='" + $id + "'") "$id must be an inert container"
+}
+Need "id='loginButton' type='button'" 'login must use an explicit non-submit button'
+Need "id='recoveryButton'[^>]*type='button'" 'recovery must use an explicit non-submit button'
+Need "addEventListener\('keydown'.*?e\.key==='Enter'" 'authentication Enter handling must be explicit JavaScript'
 Need 'function apiPost\(path,form,allowAnonymous\)' 'browser mutations need one POST seam'
 Need "fetch\(path,\{method:'POST',headers,body:new URLSearchParams\(form\)\}\)" 'apiPost must form-encode POST bodies'
 Need "response\.status===401[\s\S]*?sessionStorage\.removeItem\('k10_session'\)[\s\S]*?showLogin\(\)" '401 must clear the session and show login'
 Need "response\.status===403" '403 must be handled without clearing the session'
 Need "response\.status===429" '429 must show a generic lockout message'
+Need "function apiPost[\s\S]*?if\(response\.status===429\)throw new Error\('Too many attempts\. Try again later\.'\)[\s\S]*?if\(!response\.ok\)" 'apiPost must replace server 429 detail before general server errors'
 Need 'TextEncoder\(\).*?\.encode\(.*?\)\.length|new TextEncoder\(\)\.encode\(.*?\)\.length' 'recovery password validation must count UTF-8 bytes'
-Need "apiPost\('/action',\{cmd:b\.dataset\.cmd\},b\.dataset\.cmd==='panic'\)" 'emergency stop must allow anonymous POST'
+Need "apiPost\('/panic',\{\},true\)" 'emergency stop UI must use the dedicated anonymous endpoint'
+Reject 'data-cmd=''panic''|cmd == "panic"' 'panic must never map through the general action handler'
 Need "fetch\('/ota',\{method:'POST',headers:headers,body:fd\}\)" 'OTA must POST FormData with token headers'
 Reject "fetch\('/ota'[\s\S]{0,200}Content-Type" 'OTA must not set Content-Type manually'
+Need "fetch\('/ota'[\s\S]*?if\(response\.status===429\)throw new Error\('Too many attempts\. Try again later\.'\)[\s\S]*?if\(!response\.ok\)" 'OTA must replace server 429 detail before general server errors'
 Need 'server\.on\("/action",\s*HTTP_POST,\s*handleAction\)' '/action must be POST'
 Need 'server\.on\("/set",\s*HTTP_POST,\s*handleSet\)' '/set must be POST'
 Need 'server\.on\("/action",\s*HTTP_GET,\s*handleMethodNotAllowed\)' 'GET /action must be 405'
