@@ -73,6 +73,15 @@ RunEngine owns only historical state required by the experiment lifecycle, inclu
 
 Remains the mathematical control module. RunEngine calls existing adaptive-dose, EQP, endpoint, result, filter/dynamics, and rollover-safe time logic rather than duplicating it.
 
+The ownership rule is explicit:
+
+- `control_logic.h` may define mathematical value types such as `TitrationDynamics`, `EqpTracker`, and endpoint/dose result structures.
+- It may define pure operations over passed values and references.
+- It does not own any live experiment instance, global tracker, lifecycle, phase, or timer.
+- RunEngine owns every live dynamics, EQP, Hold, timing, and progress instance required to make a decision.
+
+In other words, mathematical type/algorithm definitions remain reusable in `control_logic.h`; the stateful lifetime of those types belongs exclusively to RunEngine.
+
 ### Arduino Adapter in `ph_titrator.ino`
 
 The sketch converts hardware/global facts into `RunInput`, calls RunEngine once per loop/command, executes `RunOutput` pump intentions, and maps stable status codes to existing display/Web strings.
@@ -117,7 +126,7 @@ RunOutput
 ├── current RunPhase
 ├── titrant PumpIntent
 ├── sample PumpIntent
-├── pulse and settle timing
+├── requested settle metadata
 ├── stable status code
 ├── stop reason
 ├── result-finalization intent
@@ -129,6 +138,8 @@ Each pump intent is one of:
 - `Stop`
 - `RunContinuous`
 - `RunForMs`
+
+`RunForMs` carries its own duration. There is no separate pulse-duration field in `RunOutput`; this prevents two sources of truth for pump timing. A separate `requestedSettleMs` field is permitted only as read-only diagnostics/display metadata describing the settle interval already committed inside RunEngine. The adapter must not use that metadata to drive transitions or independently change the engine deadline.
 
 The output defaults to `Stop` for both pumps. A pump runs only when the current transition explicitly emits a running intent. The sketch executes the complete intent every loop rather than relying on a previous command to remain correct.
 
@@ -148,6 +159,35 @@ Run commands include:
 Web and hardware-button adapters translate their existing operations into the same command values. Authentication and command admission happen before a Web command reaches RunEngine.
 
 Setup and calibration do not become RunEngine commands in this phase.
+
+## Command Mapping
+
+Every caller maps to the same RunCommand values. Adapters may authenticate or debounce before mapping, but they may not invent separate transition semantics.
+
+| Caller | Existing operation | RunCommand |
+|---|---|---|
+| Web `POST /action`, `cmd=start` | Start a configured automatic run | `StartNormal` |
+| K10 panel start gesture from SetupReady | Start a configured automatic run | `StartNormal` |
+| Web `POST /action`, `cmd=start_existing` | Start with sample already present | `StartExistingSample` |
+| Web `POST /action`, `cmd=stop` | Pause an active run | `Pause` |
+| K10 panel short pause gesture | Pause an active run | `Pause` |
+| Web Start while Paused | Resume through signal stabilization | `Resume` |
+| K10 panel short resume gesture | Resume through signal stabilization | `Resume` |
+| Web `POST /action`, `cmd=reset` after admission | Leave Done/Error and clear run history | `Reset` |
+| K10 panel reset gesture from Done/Error | Leave Done/Error and clear run history | `Reset` |
+| Main loop with no user operation | Advance timers/sensor-driven state | `Tick` |
+| OTA/safety adapter | Passes `otaLocked=true`; does not synthesize a RunCommand | `Tick` plus safety fact |
+
+Emergency stop remains a hardware/Web safety operation that immediately stops adapters and places the visible controller in its existing terminal safety state. It is not weakened into an ordinary resumable RunCommand.
+
+## Platform and Memory Constraints
+
+- RunEngine, RunInput, RunOutput, and their histories use fixed-capacity arrays and value types only.
+- No RunEngine path allocates from the heap, constructs Arduino `String`, or grows a container during an experiment.
+- `sizeof(RunEngine)` must remain at or below 4096 bytes.
+- `sizeof(RunInput) + sizeof(RunOutput)` must remain at or below 1024 bytes.
+- Native tests include compile-time/static size checks for these budgets.
+- PlatformIO size output remains part of verification; unexpected RAM growth must be reviewed before merge.
 
 ## State and Transition Rules
 
@@ -178,6 +218,8 @@ Both pumps remain stopped. The phase respects minimum/requested settle time, max
 ### Pause and Resume
 
 Pause immediately emits stop intentions and remembers the logical phase required for safe recovery. Resume never continues an interrupted active pulse. It re-enters `FilterWarmup`, forcing fresh sensor stabilization before returning to dosing decisions. Sample filling may restart only through the explicit sample-fill recovery rule and must reset its progress timers.
+
+After Resume, RunEngine returns the dedicated stable status code `ReStabilizingAfterResume` until a fresh valid signal completes warmup. The Arduino adapter maps this to an explicit user-facing message such as `Re-stabilizing signal`, so the operator can distinguish safe recovery from an unexplained delay.
 
 ### Done and Error
 
@@ -284,7 +326,7 @@ Integration verification includes:
 - Web and hardware commands enter active runs through RunEngine commands.
 - Existing pump PWM, burst parameters, dose durations, settle behavior, result formulas, methods, authentication routes, and public Web contracts remain unchanged.
 - All native, static, and firmware builds pass.
-- On-device deployment remains blocked until the deferred labelled-device Task 7 is completed onsite.
+- On-device deployment remains blocked until the deferred labelled-device authentication deployment is completed onsite. This dependency originates in `docs/superpowers/plans/2026-07-10-web-auth-command-security.md`, Task 7. The device operator owns physical label attachment and onsite smoke-test confirmation; the firmware implementer must preserve the ignored credential/label worktree until that handoff is complete.
 
 ## Future Work
 
@@ -294,4 +336,3 @@ After this extraction:
 2. Improve signal-slope estimation through recorded-curve replay.
 3. Add resilient experiment summaries and browser IndexedDB records.
 4. Consider persistent event replay only if operational diagnostics require it.
-
