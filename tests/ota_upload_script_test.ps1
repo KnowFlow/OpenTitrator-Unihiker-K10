@@ -36,3 +36,4 @@ try {
 } finally {
     Remove-Item -LiteralPath $Firmware -Force -ErrorAction SilentlyContinue
 }
+exit 0
