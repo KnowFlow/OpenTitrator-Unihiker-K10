@@ -1,5 +1,7 @@
 #include "run_engine.h"
 
+#include <cmath>
+
 namespace {
 
 const uint32_t kSampleProgressTimeoutMs = 12000U;
@@ -14,7 +16,8 @@ bool elapsedAtLeast(uint32_t nowMs, uint32_t startedAtMs, uint32_t durationMs) {
 }
 
 bool maximumFillDurationMs(const RunContext &context, uint32_t &durationMs) {
-  if (context.samplePumpFlowRateGps <= kMinimumKnownSampleFlowRateGps) {
+  if (!std::isfinite(context.samplePumpFlowRateGps) ||
+      context.samplePumpFlowRateGps <= kMinimumKnownSampleFlowRateGps) {
     return false;
   }
 
@@ -22,6 +25,9 @@ bool maximumFillDurationMs(const RunContext &context, uint32_t &durationMs) {
       (context.targetSampleGrams / context.samplePumpFlowRateGps) *
           kSampleFillDurationMultiplierMs +
       kSampleFillAllowanceMs;
+  if (!std::isfinite(computedDurationMs)) {
+    return false;
+  }
   if (computedDurationMs >= kMaximumUint32AsFloat) {
     durationMs = UINT32_MAX;
   } else {

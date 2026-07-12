@@ -1,8 +1,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 
+#define private public
 #include "../ph_titrator/run_engine.h"
+#undef private
 
 namespace {
 
@@ -66,6 +69,15 @@ RunInput warmupTick(uint32_t nowMs, bool stable) {
   input.sensor.sensorValid = stable;
   input.sensor.sensorFresh = stable;
   input.sensor.controlSettled = stable;
+  return input;
+}
+
+RunInput fillingTick(uint32_t nowMs, float targetSampleGrams, float flowRateGps, float deliveredGrams) {
+  RunInput input = tickInput();
+  input.nowMs = nowMs;
+  input.context.targetSampleGrams = targetSampleGrams;
+  input.context.samplePumpFlowRateGps = flowRateGps;
+  input.sensor.deliveredSampleGrams = deliveredGrams;
   return input;
 }
 
@@ -185,6 +197,25 @@ int main() {
   }
 
   {
+    const char *gateNames[] = {"valid", "fresh", "settled"};
+    for (size_t missingGate = 0U; missingGate < 3U; ++missingGate) {
+      RunEngine gateEngine;
+      gateEngine.step(startExistingSample());
+      RunInput incomplete = warmupTick(10U, true);
+      if (missingGate == 0U) {
+        incomplete.sensor.sensorValid = false;
+      } else if (missingGate == 1U) {
+        incomplete.sensor.sensorFresh = false;
+      } else {
+        incomplete.sensor.controlSettled = false;
+      }
+      RunOutput blocked = gateEngine.step(incomplete);
+      expectEqual(blocked.phase, RunPhase::FilterWarmup, gateNames[missingGate]);
+      expectPumpsStopped(blocked);
+    }
+  }
+
+  {
     RunEngine resumeEngine;
     resumeEngine.step(startNormal(1.0f));
     RunInput pause = tickInput();
@@ -210,6 +241,32 @@ int main() {
         RunStatusCode::ReStabilizingAfterResume,
         "unstable tick retains re-stabilization status");
     expectPumpsStopped(stillUnstable);
+
+    RunOutput stable = resumeEngine.step(warmupTick(21U, true));
+    expectEqual(stable.phase, RunPhase::Running, "stable resume tick reaches running");
+    expectEqual(stable.status, RunStatusCode::CheckingEndpoint, "stable resume tick clears re-stabilization status");
+    expectPumpsStopped(stable);
+  }
+
+  {
+    const RunPhase activePhases[] = {
+        RunPhase::SampleFilling,
+        RunPhase::FilterWarmup,
+        RunPhase::Running,
+        RunPhase::Dosing,
+        RunPhase::Settling,
+    };
+    for (RunPhase activePhase : activePhases) {
+      RunEngine pauseEngine;
+      pauseEngine.phase_ = activePhase;
+      RunInput pause = tickInput();
+      pause.command = RunCommand::Pause;
+      RunOutput paused = pauseEngine.step(pause);
+      expectEqual(paused.phase, RunPhase::Paused, "pause interrupts every active phase");
+      expectEqual(paused.status, RunStatusCode::Paused, "pause reports paused for every active phase");
+      expectEqual(pauseEngine.pausedPhase_, activePhase, "pause records the interrupted active phase");
+      expectPumpsStopped(paused);
+    }
   }
 
   {
@@ -287,6 +344,55 @@ int main() {
   }
 
   {
+    const float nonFiniteFlows[] = {
+        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+    };
+    for (float nonFiniteFlow : nonFiniteFlows) {
+      RunEngine nonFiniteFlowEngine;
+      RunInput start = startNormal(10.0f, 100U);
+      start.context.samplePumpFlowRateGps = nonFiniteFlow;
+      nonFiniteFlowEngine.step(start);
+
+      RunOutput beforeProgressTimeout = nonFiniteFlowEngine.step(
+          fillingTick(12099U, 10.0f, nonFiniteFlow, 0.0f));
+      expectEqual(
+          beforeProgressTimeout.phase,
+          RunPhase::SampleFilling,
+          "non-finite flow leaves only the progress guard before its deadline");
+
+      RunOutput progressTimeout = nonFiniteFlowEngine.step(
+          fillingTick(12100U, 10.0f, nonFiniteFlow, 0.0f));
+      expectEqual(
+          progressTimeout.phase,
+          RunPhase::Error,
+          "non-finite flow retains the progress guard at its deadline");
+      expectEqual(
+          progressTimeout.status,
+          RunStatusCode::SampleProgressTimeout,
+          "non-finite flow does not create a fill-duration timeout");
+      expectPumpsStopped(progressTimeout);
+    }
+  }
+
+  {
+    RunEngine exactProgressEngine;
+    RunInput start = startNormal(10.0f, 100U);
+    exactProgressEngine.step(start);
+
+    RunOutput refreshed = exactProgressEngine.step(fillingTick(12100U, 10.0f, 0.0f, 0.2f));
+    expectEqual(refreshed.phase, RunPhase::SampleFilling, "exactly 0.2g refreshes progress timer");
+
+    RunOutput beforeRefreshedDeadline = exactProgressEngine.step(
+        fillingTick(24099U, 10.0f, 0.0f, 0.2f));
+    expectEqual(
+        beforeRefreshedDeadline.phase,
+        RunPhase::SampleFilling,
+        "progress refresh defers timeout through its exact allowance");
+  }
+
+  {
     RunEngine resetEngine;
     resetEngine.step(startNormal(3.0f, 100U));
     RunInput resetRun = tickInput();
@@ -297,6 +403,21 @@ int main() {
     RunOutput fresh = resetEngine.step(startNormal(3.0f, 20000U));
     expectEqual(fresh.phase, RunPhase::SampleFilling, "reset allows a fresh fill run");
     expectTrue(fresh.sample.mode == PumpMode::RunContinuous, "fresh fill run restarts sample pump");
+
+    RunInput pause = tickInput();
+    pause.command = RunCommand::Pause;
+    resetEngine.step(pause);
+    RunInput resetPaused = tickInput();
+    resetPaused.command = RunCommand::Reset;
+    resetEngine.step(resetPaused);
+    expectEqual(resetEngine.pausedPhase_, RunPhase::Inactive, "reset clears paused-phase history");
+    expectTrue(resetEngine.lastSampleProgressAtMs_ == 0U, "reset clears progress time history");
+    expectTrue(resetEngine.lastSampleProgressGrams_ == 0.0f, "reset clears progress mass history");
+    RunOutput ignoredResume = resetEngine.step(RunInput{0U, RunCommand::Resume});
+    expectEqual(ignoredResume.phase, RunPhase::Inactive, "reset clears paused-phase history");
+
+    RunOutput restarted = resetEngine.step(startNormal(3.0f, 40000U));
+    expectEqual(restarted.phase, RunPhase::SampleFilling, "reset clears progress history for the next run");
   }
 
   if (failures != 0) {
