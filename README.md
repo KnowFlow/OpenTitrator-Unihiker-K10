@@ -149,8 +149,8 @@ Join the `K10-pH-Titrator` WiFi, open the AP IP shown on the K10 screen (usually
 |----------|--------|-------------|
 | `/` | GET | Main dashboard |
 | `/json` | GET | Live status JSON |
-| `/set` | GET | Save settings (`mode`, `target`, `max`, `sample`, `titrant`, `titrant_m`, `blank_g`, `titrant_density`, `sample_density`, `ssid`, `wifi_password`) |
-| `/action?cmd=` | GET | `start`, `stop`, `panic`, `tare`, `reset` |
+| `/set` | POST | Save settings (`mode`, `target`, `max`, `sample`, `titrant`, `titrant_m`, `blank_g`, `titrant_density`, `sample_density`, `ssid`, `wifi_password`) |
+| `/action` | POST | Commands in the request body: `start`, `start_existing`, `stop`, `panic`, `tare`, `reset` |
 | `/ota` | POST | Firmware binary upload |
 
 ---
