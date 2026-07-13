@@ -97,6 +97,7 @@ RunInput runningTick(uint32_t nowMs, float controlValue) {
   input.context.settings.holdSeconds = 0U;
   input.context.settings.minSettleSeconds = 1U;
   input.context.settings.maxSettleSeconds = 3U;
+  input.context.settings.resultFormula = ResultFormula::ManualFactor;
   return input;
 }
 
@@ -797,47 +798,168 @@ int main() {
   }
 
   {
-    RunEngine predoseEngine;
-    enterRunning(predoseEngine);
-    RunInput predose = runningTick(10U, 5.0f);
-    predose.context.maximumTitrantGrams = 10.0f;
-    predose.context.titrantPumpFlowRateGps = 1.0f;
-    predose.context.settings.maxConsumedGrams = 20.0f;
-    predose.context.settings.minSettleSeconds = 1U;
-    predose.context.settings.maxSettleSeconds = 3U;
-    predose.sensor.reactorMassGrams = 100.0f;
-    RunOutput firstPredose = predoseEngine.step(predose);
-    expectEqual(firstPredose.phase, RunPhase::Dosing, "applicable chemistry begins predose");
-    expectTrue(firstPredose.titrant.mode == PumpMode::RunForMs, "predose commands a titrant pulse");
-    expectTrue(firstPredose.titrant.durationMs == 2000U, "predose uses calibrated two gram step");
+    // Phase 4 predose keeps the approved legacy chemistry and pulse semantics.
+    auto predoseInput = [](uint32_t nowMs, float value) {
+      RunInput input = runningTick(nowMs, value);
+      input.context.settings.maxConsumedGrams = 20.0f;
+      input.context.settings.resultFormula = ResultFormula::AcidBaseMolar;
+      input.context.settings.sampleGrams = 10.0f;
+      input.context.settings.sampleDensityGramsPerMl = 2.0f;
+      input.context.settings.titrantDensityGramsPerMl = 2.0f;
+      input.context.settings.titrantMolarity = 0.01f;
+      input.sensor.reactorMassGrams = 100.0f;
+      return input;
+    };
 
-    RunOutput predoseSettling = predoseEngine.step(runningTick(2010U, 5.0f));
-    expectEqual(predoseSettling.phase, RunPhase::Settling, "predose pulse enters settling");
-    expectTrue(predoseSettling.hasRequestedSettleMs, "predose exposes its settle metadata");
-    expectTrue(predoseSettling.requestedSettleMs == 3000U, "predose settle clamps to settings");
+    RunEngine targetEngine;
+    enterRunning(targetEngine);
+    RunInput target = predoseInput(10U, 5.0f);
+    target.sensor.consumedTitrantGrams = 6.5f;
+    target.sensor.reactorMassGrams = 106.5f;
+    RunOutput targetPulse = targetEngine.step(target);
+    expectTrue(targetPulse.titrant.durationMs == 2000U,
+               "predose target uses sample milliliters times titrant density times 70 percent");
 
-    RunInput fallback = runningTick(6000U, 5.0f);
-    fallback.context.maximumTitrantGrams = 10.0f;
-    fallback.context.titrantPumpFlowRateGps = std::numeric_limits<float>::quiet_NaN();
-    fallback.context.settings.maxConsumedGrams = 20.0f;
-    fallback.sensor.reactorMassGrams = 102.0f;
-    predoseEngine.step(fallback);
-    fallback.nowMs = 6001U;
-    RunOutput secondPredose = predoseEngine.step(fallback);
-    expectEqual(secondPredose.phase, RunPhase::Dosing, "predose continues below target");
-    expectTrue(secondPredose.titrant.durationMs == 2000U, "unsafe flow uses fallback pulse without casting");
+    RunEngine cappedTargetEngine;
+    enterRunning(cappedTargetEngine);
+    RunInput capped = predoseInput(10U, 5.0f);
+    capped.context.settings.sampleGrams = 20.0f;
+    capped.context.settings.sampleDensityGramsPerMl = 1.0f;
+    capped.context.settings.titrantDensityGramsPerMl = 1.0f;
+    capped.context.settings.maxConsumedGrams = 3.0f;
+    capped.sensor.consumedTitrantGrams = 2.5f;
+    capped.sensor.reactorMassGrams = 102.5f;
+    RunOutput cappedPulse = cappedTargetEngine.step(capped);
+    expectTrue(cappedPulse.titrant.durationMs == 2000U,
+               "predose target is capped by maximum consumed grams");
 
-    RunEngine tinyDurationEngine;
-    enterRunning(tinyDurationEngine);
-    RunInput tinyDuration = runningTick(10U, 5.0f);
-    tinyDuration.context.maximumTitrantGrams = 10.0f;
-    tinyDuration.context.titrantPumpFlowRateGps = 1.0e38f;
-    tinyDuration.context.settings.maxConsumedGrams = 20.0f;
-    tinyDuration.sensor.reactorMassGrams = 100.0f;
-    RunOutput safeDuration = tinyDurationEngine.step(tinyDuration);
-    expectTrue(
-        safeDuration.titrant.durationMs == 2000U,
-        "sub-millisecond calibrated duration uses fallback without truncating to zero");
+    const float flowRates[] = {0.001f, 0.002f, 2.0f, 0.5f,
+                               std::numeric_limits<float>::quiet_NaN()};
+    const uint32_t expectedPulseMs[] = {2000U, 5000U, 2000U, 4000U, 2000U};
+    for (size_t i = 0U; i < sizeof(flowRates) / sizeof(flowRates[0]); ++i) {
+      RunEngine flowEngine;
+      enterRunning(flowEngine);
+      RunInput flow = predoseInput(10U, 5.0f);
+      flow.context.titrantPumpFlowRateGps = flowRates[i];
+      RunOutput flowPulse = flowEngine.step(flow);
+      expectTrue(flowPulse.titrant.durationMs == expectedPulseMs[i],
+                 "predose flow threshold and pulse clamps preserve legacy bounds");
+    }
+
+    for (size_t i = 0U; i < 6U; ++i) {
+      RunEngine eligibilityEngine;
+      enterRunning(eligibilityEngine);
+      RunInput eligibility = predoseInput(10U, 5.0f);
+      switch (i) {
+        case 0U:
+          eligibility.context.settings.endpoint = ControlEndpoint::Millivolts;
+          break;
+        case 1U:
+          eligibility.context.settings.resultFormula = ResultFormula::ManualFactor;
+          break;
+        case 2U:
+          eligibility.context.settings.titrantMolarity = 0.0f;
+          break;
+        case 3U:
+          eligibility.context.settings.sampleGrams = 0.0f;
+          break;
+        case 4U:
+          eligibility.context.settings.sampleDensityGramsPerMl = 0.0f;
+          break;
+        default:
+          eligibility.context.settings.titrantDensityGramsPerMl = 0.0f;
+          break;
+      }
+      RunOutput noPredose = eligibilityEngine.step(eligibility);
+      expectTrue(noPredose.titrant.durationMs != 2000U,
+                 "predose requires pH acid-base chemistry with positive molarity and masses");
+    }
+
+    RunEngine lowErrorEngine;
+    enterRunning(lowErrorEngine);
+    RunOutput lowError = lowErrorEngine.step(predoseInput(10U, 6.2f));
+    expectTrue(lowError.titrant.durationMs == 150U,
+               "predose is blocked within three control bands");
+
+    RunEngine wrongDirectionEngine;
+    enterRunning(wrongDirectionEngine);
+    RunOutput wrongDirection = wrongDirectionEngine.step(predoseInput(10U, 8.0f));
+    expectEqual(wrongDirection.phase, RunPhase::Done, "predose is blocked when dosing moves away from target");
+
+    auto steepPredose = [&](float secondValue) {
+      RunEngine steepEngine;
+      enterRunning(steepEngine);
+      RunInput first = predoseInput(10U, 3.0f);
+      first.context.settings.resultFormula = ResultFormula::ManualFactor;
+      first.context.settings.minSettleSeconds = 0U;
+      first.context.settings.maxSettleSeconds = 0U;
+      steepEngine.step(first);
+      first.nowMs = 460U;
+      steepEngine.step(first);
+      first.nowMs = 461U;
+      steepEngine.step(first);
+      first.nowMs = 462U;
+      steepEngine.step(first);
+      first.nowMs = 912U;
+      steepEngine.step(first);
+      first.nowMs = 913U;
+      steepEngine.step(first);
+      RunInput second = predoseInput(915U, secondValue);
+      return steepEngine.step(second);
+    };
+    RunOutput steepNear = steepPredose(5.3f);
+    expectTrue(steepNear.titrant.durationMs != 2000U,
+               "steep dynamics block predose through six control bands");
+    RunOutput steepFar = steepPredose(5.0f);
+    expectTrue(steepFar.titrant.durationMs == 2000U,
+               "steep dynamics still allow predose beyond six control bands");
+
+    RunEngine safetyEngine;
+    enterRunning(safetyEngine);
+    RunInput invalid = predoseInput(10U, 5.0f);
+    invalid.sensor.sensorValid = false;
+    RunOutput invalidReading = safetyEngine.step(invalid);
+    expectEqual(invalidReading.phase, RunPhase::Error, "Phase 4 invalid sensor stops before predose");
+    expectPumpsStopped(invalidReading);
+
+    RunEngine scaleSafetyEngine;
+    enterRunning(scaleSafetyEngine);
+    RunInput badScale = predoseInput(10U, 5.0f);
+    badScale.sensor.scaleValid = false;
+    RunOutput scaleFailure = scaleSafetyEngine.step(badScale);
+    expectEqual(scaleFailure.phase, RunPhase::Error, "Phase 4 scale failure stops before predose");
+    expectPumpsStopped(scaleFailure);
+
+    RunEngine massSafetyEngine;
+    enterRunning(massSafetyEngine);
+    RunInput atMassLimit = predoseInput(10U, 5.0f);
+    atMassLimit.context.settings.maxConsumedGrams = 2.0f;
+    atMassLimit.sensor.consumedTitrantGrams = 2.0f;
+    RunOutput massLimit = massSafetyEngine.step(atMassLimit);
+    expectEqual(massLimit.phase, RunPhase::Error, "Phase 4 mass limit stops before predose");
+    expectPumpsStopped(massLimit);
+
+    RunEngine timeSafetyEngine;
+    enterRunning(timeSafetyEngine, 100U);
+    RunInput atTimeLimit = predoseInput(1100U, 5.0f);
+    atTimeLimit.context.settings.maxTimeSeconds = 1U;
+    RunOutput timeLimit = timeSafetyEngine.step(atTimeLimit);
+    expectEqual(timeLimit.phase, RunPhase::Error, "Phase 4 time limit stops before predose");
+    expectPumpsStopped(timeLimit);
+
+    RunEngine interruptEngine;
+    enterRunning(interruptEngine);
+    interruptEngine.step(predoseInput(10U, 5.0f));
+    RunInput pause = tickInput();
+    pause.command = RunCommand::Pause;
+    RunOutput paused = interruptEngine.step(pause);
+    expectEqual(paused.phase, RunPhase::Paused, "Phase 4 pause interrupts predose pulse");
+    expectPumpsStopped(paused);
+    RunInput resetRun = tickInput();
+    resetRun.command = RunCommand::Reset;
+    RunOutput phase4Reset = interruptEngine.step(resetRun);
+    expectEqual(phase4Reset.phase, RunPhase::Inactive, "Phase 4 reset clears paused predose state");
+    expectPumpsStopped(phase4Reset);
   }
 
   if (failures != 0) {

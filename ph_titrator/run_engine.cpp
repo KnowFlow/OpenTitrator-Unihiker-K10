@@ -46,8 +46,7 @@ bool validPredoseChemistry(const RunContext &context) {
   const TitrationSettings &settings = context.settings;
   return settings.endpoint == ControlEndpoint::Ph &&
          settings.resultFormula == ResultFormula::AcidBaseMolar &&
-         std::isfinite(context.maximumTitrantGrams) && context.maximumTitrantGrams > 0.0f &&
-         std::isfinite(settings.maxConsumedGrams) && settings.maxConsumedGrams > 0.0f &&
+         std::isfinite(settings.titrantMolarity) && settings.titrantMolarity > 0.0f &&
          std::isfinite(settings.sampleGrams) && settings.sampleGrams > 0.0f &&
          std::isfinite(settings.titrantDensityGramsPerMl) &&
          settings.titrantDensityGramsPerMl > 0.0f &&
@@ -56,13 +55,15 @@ bool validPredoseChemistry(const RunContext &context) {
 }
 
 uint32_t predosePulseMs(float grams, float flowRateGps) {
-  if (std::isfinite(flowRateGps) && flowRateGps > 0.0f) {
+  if (std::isfinite(flowRateGps) && flowRateGps > kMinimumKnownSampleFlowRateGps) {
     const float requestedMs = grams / flowRateGps * 1000.0f;
-    if (std::isfinite(requestedMs) && requestedMs >= 1.0f) {
-      const float cappedMs = requestedMs > static_cast<float>(kPredoseMaximumPulseMs)
-                                 ? static_cast<float>(kPredoseMaximumPulseMs)
-                                 : requestedMs;
-      return static_cast<uint32_t>(cappedMs);
+    if (std::isfinite(requestedMs)) {
+      const float minimumMs = static_cast<float>(kPredoseFallbackPulseMs);
+      const float maximumMs = static_cast<float>(kPredoseMaximumPulseMs);
+      const float clampedMs = requestedMs < minimumMs
+                                  ? minimumMs
+                                  : (requestedMs > maximumMs ? maximumMs : requestedMs);
+      return static_cast<uint32_t>(clampedMs);
     }
   }
   return kPredoseFallbackPulseMs;
@@ -274,7 +275,10 @@ RunOutput RunEngine::step(const RunInput &input) {
           const float target = controlTarget(settings_);
           const float error = absoluteFloat(input.sensor.controlValue - target);
           if (validPredoseChemistry(input.context)) {
-            const float uncappedTarget = input.context.maximumTitrantGrams * kPredoseRatio;
+            const float sampleMilliliters =
+                gramsToMilliliters(settings_.sampleGrams, settings_.sampleDensityGramsPerMl);
+            const float uncappedTarget =
+                sampleMilliliters * settings_.titrantDensityGramsPerMl * kPredoseRatio;
             predoseTargetGrams_ = uncappedTarget > settings_.maxConsumedGrams
                                       ? settings_.maxConsumedGrams
                                       : uncappedTarget;
@@ -283,7 +287,8 @@ RunOutput RunEngine::step(const RunInput &input) {
           }
           const bool canPredose = predoseTargetGrams_ > consumedTitrantGrams_ &&
                                   error > settings_.controlBand * 3.0f &&
-                                  !dynamics_.isSteep(settings_.endpoint);
+                                  (!dynamics_.isSteep(settings_.endpoint) ||
+                                   error > settings_.controlBand * 6.0f);
           if (canPredose) {
             const float remainingGrams = predoseTargetGrams_ - consumedTitrantGrams_;
             const float stepGrams = remainingGrams > kPredoseStepGrams ? kPredoseStepGrams : remainingGrams;
