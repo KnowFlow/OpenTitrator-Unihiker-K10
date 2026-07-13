@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "control_logic.h"
+
 enum class RunPhase : uint8_t {
   Inactive = 0,
   SampleFilling = 1,
@@ -91,6 +93,7 @@ struct RunContext {
   float samplePumpFlowRateGps = 0.0f;
   float maximumTitrantGrams = 0.0f;
   uint32_t maximumRunMs = 0U;
+  TitrationSettings settings{};
   bool otaLocked = false;
 };
 

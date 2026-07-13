@@ -19,6 +19,15 @@ private:
   uint32_t lastSampleProgressAtMs_;
   float lastSampleProgressGrams_;
   bool reStabilizingAfterResume_;
+  TitrationSettings settings_;
+  TitrationDynamics dynamics_;
+  EndpointHoldTracker endpointHold_;
+  uint32_t runStartedAtMs_;
+  uint32_t pulseStartedAtMs_;
+  uint32_t settleStartedAtMs_;
+  uint32_t activePulseMs_;
+  uint32_t activeSettleMs_;
+  uint32_t activeMaxSettleMs_;
 };
 
 #endif
