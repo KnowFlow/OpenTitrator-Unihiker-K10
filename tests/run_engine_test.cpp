@@ -3,9 +3,7 @@
 #include <iostream>
 #include <limits>
 
-#define private public
 #include "../ph_titrator/run_engine.h"
-#undef private
 
 namespace {
 
@@ -268,27 +266,6 @@ int main() {
   }
 
   {
-    const RunPhase activePhases[] = {
-        RunPhase::SampleFilling,
-        RunPhase::FilterWarmup,
-        RunPhase::Running,
-        RunPhase::Dosing,
-        RunPhase::Settling,
-    };
-    for (RunPhase activePhase : activePhases) {
-      RunEngine pauseEngine;
-      pauseEngine.phase_ = activePhase;
-      RunInput pause = tickInput();
-      pause.command = RunCommand::Pause;
-      RunOutput paused = pauseEngine.step(pause);
-      expectEqual(paused.phase, RunPhase::Paused, "pause interrupts every active phase");
-      expectEqual(paused.status, RunStatusCode::Paused, "pause reports paused for every active phase");
-      expectEqual(pauseEngine.pausedPhase_, activePhase, "pause records the interrupted active phase");
-      expectPumpsStopped(paused);
-    }
-  }
-
-  {
     RunEngine progressTimeoutEngine;
     const uint32_t startAt = UINT32_MAX - 999U;
     RunInput start = startNormal(5.0f, startAt);
@@ -510,9 +487,6 @@ int main() {
     RunInput resetPaused = tickInput();
     resetPaused.command = RunCommand::Reset;
     resetEngine.step(resetPaused);
-    expectEqual(resetEngine.pausedPhase_, RunPhase::Inactive, "reset clears paused-phase history");
-    expectTrue(resetEngine.lastSampleProgressAtMs_ == 0U, "reset clears progress time history");
-    expectTrue(resetEngine.lastSampleProgressGrams_ == 0.0f, "reset clears progress mass history");
     RunOutput ignoredResume = resetEngine.step(RunInput{0U, RunCommand::Resume});
     expectEqual(ignoredResume.phase, RunPhase::Inactive, "reset clears paused-phase history");
 
@@ -530,7 +504,6 @@ int main() {
     expectTrue(dose.titrant.mode == PumpMode::RunForMs, "ordinary dose runs titrant once");
     expectTrue(dose.titrant.durationMs == 450U, "ordinary dose uses adaptive pulse duration");
     expectPumpStopped(dose.sample, "ordinary dose keeps sample stopped");
-    expectTrue(ordinaryEngine.dynamics_.count == 1U, "ordinary sample is stored in engine dynamics");
 
     RunOutput duringPulse = ordinaryEngine.step(runningTick(100U, 5.0f));
     expectEqual(duringPulse.phase, RunPhase::Dosing, "unexpired pulse remains dosing");
@@ -592,6 +565,27 @@ int main() {
     expectEqual(timeFault.phase, RunPhase::Error, "time limit survives rollover");
     expectEqual(timeFault.status, RunStatusCode::TimeLimit, "time limit has stable status");
     expectPumpsStopped(timeFault);
+
+    RunEngine unlimitedTimeEngine;
+    enterRunning(unlimitedTimeEngine, 100U);
+    RunInput unlimitedTime = runningTick(1000000U, 5.0f);
+    unlimitedTime.context.settings.maxTimeSeconds = 0U;
+    RunOutput unlimited = unlimitedTimeEngine.step(unlimitedTime);
+    expectEqual(unlimited.phase, RunPhase::Dosing, "zero maximum time disables the time limit");
+    expectPumpStopped(unlimited.sample, "unlimited time keeps sample stopped");
+
+    RunEngine endpointMassLimitEngine;
+    enterRunning(endpointMassLimitEngine);
+    RunInput atEndpointMassLimit = runningTick(10U, 7.0f);
+    atEndpointMassLimit.context.settings.holdSeconds = 0U;
+    atEndpointMassLimit.context.settings.maxConsumedGrams = 2.0f;
+    atEndpointMassLimit.sensor.consumedTitrantGrams = 2.0f;
+    RunOutput endpointMassFault = endpointMassLimitEngine.step(atEndpointMassLimit);
+    expectEqual(endpointMassFault.phase, RunPhase::Error, "mass limit has precedence over endpoint finalization");
+    expectEqual(endpointMassFault.status, RunStatusCode::MassLimit, "endpoint mass limit has stable status");
+    expectTrue(endpointMassFault.stopReason == RunStopReason::MassLimit, "endpoint mass limit has stable reason");
+    expectTrue(!endpointMassFault.finalizeResult, "endpoint mass limit does not finalize a result");
+    expectPumpsStopped(endpointMassFault);
   }
 
   {
@@ -609,18 +603,41 @@ int main() {
     RunOutput resetHold = holdEngine.step(outOfRange);
     expectEqual(resetHold.phase, RunPhase::Dosing, "out-of-range sample resets hold before dosing");
 
-    RunInput holdAgain = runningTick(2000U, 7.0f);
+    RunOutput pulseExpired = holdEngine.step(runningTick(1460U, 6.0f));
+    expectEqual(pulseExpired.phase, RunPhase::Settling, "out-of-range dose completes before hold restart");
+    RunOutput resumed = holdEngine.step(runningTick(4460U, 6.0f));
+    expectEqual(resumed.phase, RunPhase::Running, "public lifecycle returns to running after settling");
+
+    RunInput holdAgain = runningTick(5000U, 7.0f);
     holdAgain.context.settings.holdSeconds = 2U;
-    holdEngine.phase_ = RunPhase::Running;
     RunOutput restartedHold = holdEngine.step(holdAgain);
     expectEqual(restartedHold.status, RunStatusCode::HoldingEndpoint, "fresh in-range sample restarts hold");
-    RunInput completeHold = runningTick(4000U, 7.0f);
+    RunInput completeHold = runningTick(7000U, 7.0f);
     completeHold.context.settings.holdSeconds = 2U;
     RunOutput done = holdEngine.step(completeHold);
     expectEqual(done.phase, RunPhase::Done, "continuous endpoint hold finalizes");
     expectEqual(done.status, RunStatusCode::TargetReached, "continuous hold has target status");
     expectTrue(done.finalizeResult, "continuous hold finalizes result");
     expectPumpsStopped(done);
+
+    RunEngine staleHoldEngine;
+    enterRunning(staleHoldEngine);
+    RunInput beginHold = runningTick(10U, 7.0f);
+    beginHold.context.settings.holdSeconds = 2U;
+    staleHoldEngine.step(beginHold);
+    RunInput staleHold = runningTick(1010U, 7.0f);
+    staleHold.sensor.sensorFresh = false;
+    staleHold.context.settings.holdSeconds = 2U;
+    RunOutput staleHoldOutput = staleHoldEngine.step(staleHold);
+    expectEqual(staleHoldOutput.phase, RunPhase::Running, "stale endpoint observation keeps running");
+    RunInput freshHold = runningTick(2000U, 7.0f);
+    freshHold.context.settings.holdSeconds = 2U;
+    RunOutput restartedAfterStale = staleHoldEngine.step(freshHold);
+    expectEqual(restartedAfterStale.status, RunStatusCode::HoldingEndpoint, "stale endpoint observation restarts the hold interval");
+    RunInput finishFreshHold = runningTick(4000U, 7.0f);
+    finishFreshHold.context.settings.holdSeconds = 2U;
+    RunOutput completedFreshHold = staleHoldEngine.step(finishFreshHold);
+    expectEqual(completedFreshHold.phase, RunPhase::Done, "continuous fresh endpoint observations complete hold");
 
     RunEngine immediateEngine;
     enterRunning(immediateEngine);
@@ -651,6 +668,34 @@ int main() {
     RunOutput maxExpired = maxSettleEngine.step(unready);
     expectEqual(maxExpired.phase, RunPhase::Running, "maximum settle returns safely without sensor transition facts");
     expectPumpsStopped(maxExpired);
+
+    RunEngine dynamicsSettleEngine;
+    enterRunning(dynamicsSettleEngine);
+    RunInput initialDose = runningTick(10U, 5.0f);
+    initialDose.context.settings.minSettleSeconds = 1U;
+    initialDose.context.settings.maxSettleSeconds = 10U;
+    initialDose.context.settings.stableDelta = 0.01f;
+    dynamicsSettleEngine.step(initialDose);
+    RunInput pulseExpiry = runningTick(460U, 5.0f);
+    pulseExpiry.context.settings.minSettleSeconds = 1U;
+    pulseExpiry.context.settings.maxSettleSeconds = 10U;
+    pulseExpiry.context.settings.stableDelta = 0.01f;
+    dynamicsSettleEngine.step(pulseExpiry);
+    RunInput settlingSample = runningTick(1000U, 5.0f);
+    settlingSample.context.settings.minSettleSeconds = 1U;
+    settlingSample.context.settings.maxSettleSeconds = 10U;
+    settlingSample.context.settings.stableDelta = 0.01f;
+    settlingSample.sensor.controlSettled = false;
+    RunOutput waitingForDynamics = dynamicsSettleEngine.step(settlingSample);
+    expectEqual(waitingForDynamics.phase, RunPhase::Settling, "settling waits until engine dynamics have enough samples");
+    RunInput settledByDynamics = runningTick(5500U, 5.0f);
+    settledByDynamics.context.settings.minSettleSeconds = 1U;
+    settledByDynamics.context.settings.maxSettleSeconds = 10U;
+    settledByDynamics.context.settings.stableDelta = 0.01f;
+    settledByDynamics.sensor.controlSettled = false;
+    RunOutput earlyDynamicsReturn = dynamicsSettleEngine.step(settledByDynamics);
+    expectEqual(earlyDynamicsReturn.phase, RunPhase::Running, "engine dynamics end settling before maximum timeout");
+    expectPumpsStopped(earlyDynamicsReturn);
   }
 
   {
@@ -671,11 +716,7 @@ int main() {
     RunInput resetRun = tickInput();
     resetRun.command = RunCommand::Reset;
     resetStateEngine.step(resetRun);
-    expectTrue(resetStateEngine.dynamics_.count == 0U, "reset clears engine dynamics");
-    expectTrue(!resetStateEngine.endpointHold_.active(), "reset clears endpoint hold state");
-    expectTrue(resetStateEngine.runStartedAtMs_ == 0U, "reset clears run start time");
-    expectTrue(resetStateEngine.pulseStartedAtMs_ == 0U, "reset clears pulse start time");
-    expectTrue(resetStateEngine.settleStartedAtMs_ == 0U, "reset clears settle start time");
+    expectEqual(resetStateEngine.phase(), RunPhase::Inactive, "reset clears active lifecycle state");
   }
 
   if (failures != 0) {

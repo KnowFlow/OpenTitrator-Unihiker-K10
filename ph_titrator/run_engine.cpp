@@ -144,7 +144,10 @@ RunOutput RunEngine::step(const RunInput &input) {
       phase_ = RunPhase::Error;
       stopReason_ = RunStopReason::ScaleFailure;
     } else if (input.sensor.sensorFresh) {
-      if (elapsedAtLeast(
+      if (input.sensor.consumedTitrantGrams >= settings_.maxConsumedGrams) {
+        phase_ = RunPhase::Error;
+        stopReason_ = RunStopReason::MassLimit;
+      } else if (settings_.maxTimeSeconds > 0U && elapsedAtLeast(
               input.nowMs,
               runStartedAtMs_,
               static_cast<uint32_t>(settings_.maxTimeSeconds) * 1000UL)) {
@@ -192,6 +195,8 @@ RunOutput RunEngine::step(const RunInput &input) {
           }
         }
       }
+    } else {
+      endpointHold_.reset();
     }
   }
 
@@ -206,9 +211,15 @@ RunOutput RunEngine::step(const RunInput &input) {
   if (input.command == RunCommand::Tick && phaseAtTick == RunPhase::Settling) {
     const bool minimumElapsed = elapsedAtLeast(input.nowMs, settleStartedAtMs_, activeSettleMs_);
     const bool maximumElapsed = elapsedAtLeast(input.nowMs, settleStartedAtMs_, activeMaxSettleMs_);
+    const bool hasFreshValidSample =
+        input.sensor.sensorValid && input.sensor.sensorFresh && input.sensor.scaleValid &&
+        isValidControlValue(settings_, input.sensor.controlValue);
+    if (hasFreshValidSample) {
+      dynamics_.add(input.sensor.controlValue, input.nowMs);
+    }
     if (maximumElapsed ||
-        (minimumElapsed && input.sensor.sensorValid && input.sensor.sensorFresh &&
-         input.sensor.controlSettled && input.sensor.scaleValid)) {
+        (minimumElapsed && hasFreshValidSample &&
+         dynamics_.isSettledWithin(settings_.stableDelta))) {
       phase_ = RunPhase::Running;
     }
   }
