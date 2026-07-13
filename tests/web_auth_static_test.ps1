@@ -13,6 +13,9 @@ foreach ($id in 'loginForm','recoveryForm') {
   Reject ("<form[^>]*id='" + $id + "'") "$id must not have a native submission path"
   Need ("<div id='" + $id + "'") "$id must be an inert container"
 }
+$authPanelIndex = $sketch.IndexOf("<section id='authPanel'")
+$guidePanelIndex = $sketch.IndexOf("<section id='tab-guide'")
+if ($authPanelIndex -le $guidePanelIndex) { throw 'FAIL: authorization panel must appear after every tab panel' }
 Need "id='loginButton' type='button'" 'login must use an explicit non-submit button'
 Need "id='recoveryButton'[^>]*type='button'" 'recovery must use an explicit non-submit button'
 Need "addEventListener\('keydown'.*?e\.key==='Enter'" 'authentication Enter handling must be explicit JavaScript'
