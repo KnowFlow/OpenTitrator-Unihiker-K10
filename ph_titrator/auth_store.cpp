@@ -12,6 +12,14 @@ static constexpr uint8_t FACTORY_AUTH_SALT[AuthCredential::SaltBytes] = {};
 static constexpr uint8_t FACTORY_AUTH_HASH[AuthCredential::HashBytes] = {};
 #endif
 
+#if defined(AUTH_USB_RECOVERY)
+#if __has_include("recovery_admin.generated.h")
+#include "recovery_admin.generated.h"
+#else
+#error "Missing recovery_admin.generated.h: run scripts/generate_recovery_admin.py before recovery builds"
+#endif
+#endif
+
 bool AuthStore::loadAdministrator(AuthCredential &out) {
   Preferences prefs;
   if (!prefs.begin("auth", true)) return false;
@@ -53,4 +61,22 @@ bool AuthStore::loadFactory(AuthCredential &out) {
   memcpy(out.salt, FACTORY_AUTH_SALT, sizeof out.salt);
   memcpy(out.hash, FACTORY_AUTH_HASH, sizeof out.hash);
   out.valid = true; return true;
+}
+
+bool AuthStore::loadRecoveryAdministrator(AuthCredential &out) {
+#if defined(AUTH_USB_RECOVERY)
+  static_assert(sizeof RECOVERY_ADMIN_SALT == AuthCredential::SaltBytes, "recovery salt length");
+  static_assert(sizeof RECOVERY_ADMIN_HASH == AuthCredential::HashBytes, "recovery hash length");
+  if (RECOVERY_ADMIN_VERSION != 1 || RECOVERY_ADMIN_ITERATIONS == 0) return false;
+  out = AuthCredential{};
+  out.version = RECOVERY_ADMIN_VERSION;
+  out.iterations = RECOVERY_ADMIN_ITERATIONS;
+  memcpy(out.salt, RECOVERY_ADMIN_SALT, sizeof out.salt);
+  memcpy(out.hash, RECOVERY_ADMIN_HASH, sizeof out.hash);
+  out.valid = true;
+  return true;
+#else
+  (void)out;
+  return false;
+#endif
 }

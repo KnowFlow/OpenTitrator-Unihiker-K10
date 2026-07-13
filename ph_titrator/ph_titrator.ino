@@ -1,3 +1,5 @@
+#if !defined(AUTH_USB_RECOVERY)
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
@@ -3191,3 +3193,5 @@ void loop() {
   }
   drawDisplay();
 }
+
+#endif

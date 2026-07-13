@@ -8,6 +8,7 @@
 *.bin
 *.hex
 ph_titrator/factory_auth.generated.h
+ph_titrator/recovery_admin.generated.h
 factory-label*.txt
 
 # IDE
