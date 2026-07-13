@@ -155,6 +155,30 @@ Join the `K10-pH-Titrator` WiFi, open the AP IP shown on the K10 screen (usually
 
 ---
 
+## RunEngine lifecycle boundary
+
+`RunEngine` owns the active experiment lifecycle and its history: phase; filling/progress; run, pulse, and settle timers; dosing dynamics; endpoint hold; equivalence-point (EQP) tracking; predose progress; active mass/result selection; and emergency stop. It is a pure C++17 boundary with fixed memory budgets: `sizeof(RunEngine) <= 4096` and `sizeof(RunInput) + sizeof(RunOutput) <= 1024`.
+
+`control_logic.h` provides pure calculations and reusable value types; it does not own live experiment state. The sketch owns hardware and sensors, Web/authentication, OTA, display, setup/calibration, persistence, and only translates inputs into `RunInput` and `RunOutput` intentions back to hardware/UI.
+
+Every active-run entry point uses the same command mapping:
+
+| Source | `RunCommand` |
+|--------|--------------|
+| Web/panel Start | `StartNormal` |
+| Start existing sample | `StartExistingSample` |
+| Stop/pause | `Pause` |
+| Paused Start/resume | `Resume` |
+| Reset | `Reset` |
+| Main loop | `Tick` |
+| AB-long and Web panic | `EmergencyStop` |
+
+Resume always re-enters `FilterWarmup`; the display tells the operator `正在重新稳定信号` while the signal is re-stabilized. `requestedSettleMs` is display/diagnostic metadata only. It cannot advance lifecycle transitions; only engine time and input sensor facts can do that.
+
+On-device deployment is deferred. The labelled-device Task 7 in [the Web/auth command-security plan](docs/superpowers/plans/2026-07-10-web-auth-command-security.md) must be completed onsite by the onsite operator before device installation or smoke verification. This phase does not claim deployment.
+
+---
+
 ## Project Structure
 
 ```

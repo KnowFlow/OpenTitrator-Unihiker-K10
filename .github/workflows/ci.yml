@@ -61,3 +61,27 @@ jobs:
           ./tests/ota_upload_script_test.ps1
           ./tests/web_auth_static_test.ps1
           ./tests/sketch_safety_static_test.ps1
+
+  run-engine-tests:
+    name: RunEngine (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: g++
+            package: g++
+          - compiler: clang++
+            package: clang
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install compiler
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.package }}
+
+      - name: Build and run RunEngine tests
+        run: |
+          ${{ matrix.compiler }} -std=c++17 -Wall -Wextra -Werror -pedantic \
+            tests/run_engine_test.cpp ph_titrator/run_engine.cpp -o run_engine_test
+          ./run_engine_test
