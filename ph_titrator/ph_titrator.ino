@@ -12,8 +12,10 @@
 #include "auth_crypto_esp32.h"
 #include "auth_store.h"
 #include "command_admission.h"
+#include "run_engine.h"
 
 struct SettingsCandidate;
+class PumpController;
 
 UNIHIKER_K10 k10;
 Servo titrantPumpServo;
@@ -676,14 +678,13 @@ PumpController samplePump;
 TitrationSettings settings;
 TitrationMethod currentMethod = TitrationMethod::PhEndpoint;
 RunState state = RunState::SetupMode;
-RunState pausedFromState = RunState::Running;
 TitrationStopReason stopReason = TitrationStopReason::None;
 
 PhReading lastPh;
 ScaleReading lastScale;
 PhFilter phFilter;
-TitrationDynamics phDynamics;
-EqpTracker eqpTracker;
+RunEngine runEngine;
+RunOutput lastRunOutput;
 float titrantPumpFlowRateGps = 0.0f;
 float samplePumpFlowRateGps = 0.0f;
 int titrantPumpRunUs = TITRANT_PUMP_DEFAULT_RUN_US;
@@ -699,21 +700,13 @@ int manualSweepLastUs = 0;
 uint32_t manualSweepStartedMs = 0;
 uint32_t manualSweepDurationMs = 10000;
 uint32_t manualSweepLastCommandMs = 0;
-float initialBottleWeight = 0.0f;
 float sampleStartWeight = 0.0f;
 float sampleDeliveredGrams = 0.0f;
-float sampleLastProgressGrams = 0.0f;
 float consumedGrams = 0.0f;
 float endpointUsedGrams = 0.0f;
 float resultValue = 0.0f;
-float stoichPredoseTargetGrams = 0.0f;
 uint32_t stateStartedMs = 0;
-uint32_t runStartedMs = 0;
-EndpointHoldTracker endpointHold;
-uint32_t sampleFillingStartedMs = 0;
-uint32_t sampleLastProgressMs = 0;
-uint16_t activePulseMs = 0;
-uint16_t activeSettleMs = 0;
+uint32_t displayedPulseMs = 0;
 uint8_t sensorFaultCount = 0;
 bool phReady = false;
 bool scaleReady = false;
@@ -755,9 +748,6 @@ bool devicePresent(uint8_t address) {
 }
 
 void setState(RunState next, const String &status) {
-  if (next == RunState::Error) {
-    endpointHold.reset();
-  }
   state = next;
   statusLine = status;
   stateStartedMs = millis();
@@ -900,82 +890,6 @@ float estimateStoichTitrantGrams() {
     return 0.0f;
   }
   return sampleMilliliters * settings.titrantDensityGramsPerMl;
-}
-
-void refreshStoichPredoseTarget() {
-  float estimate = estimateStoichTitrantGrams();
-  stoichPredoseTargetGrams = estimate * STOICH_PREDOSE_RATIO;
-  if (settings.maxConsumedGrams > 0.0f && stoichPredoseTargetGrams > settings.maxConsumedGrams) {
-    stoichPredoseTargetGrams = settings.maxConsumedGrams;
-  }
-}
-
-bool applyStoichPredoseIfNeeded() {
-  if (stoichPredoseTargetGrams <= 0.0f ||
-      consumedGrams >= stoichPredoseTargetGrams ||
-      !acidBaseStoichPredoseAllowed()) {
-    return false;
-  }
-
-  const float target = activeControlTarget();
-  const float current = activeControlValue();
-  const bool doseRaisesValue = doseIncreasesControlValue(settings);
-  const bool shouldDose = doseRaisesValue ? current < target : current > target;
-  const float error = absoluteFloat(current - target);
-  if (!shouldDose || error <= settings.controlBand * 3.0f) {
-    return false;
-  }
-  if (error <= settings.controlBand * 6.0f && phDynamics.isSteep(settings.endpoint)) {
-    return false;
-  }
-
-  float remainingPredose = stoichPredoseTargetGrams - consumedGrams;
-  float stepGrams = remainingPredose < STOICH_PREDOSE_STEP_G ? remainingPredose : STOICH_PREDOSE_STEP_G;
-  uint16_t pulseMs = STOICH_PREDOSE_FALLBACK_PULSE_MS;
-  if (titrantPumpFlowRateGps > 0.001f && stepGrams > 0.0f) {
-    uint32_t computed = (uint32_t)(stepGrams * 1000.0f / titrantPumpFlowRateGps);
-    if (computed < STOICH_PREDOSE_FALLBACK_PULSE_MS) {
-      computed = STOICH_PREDOSE_FALLBACK_PULSE_MS;
-    }
-    if (computed > STOICH_PREDOSE_MAX_PULSE_MS) {
-      computed = STOICH_PREDOSE_MAX_PULSE_MS;
-    }
-    pulseMs = (uint16_t)computed;
-  }
-
-  activePulseMs = pulseMs;
-  activeSettleMs = clampSettleMs(settings, STOICH_PREDOSE_SETTLE_MS);
-  pump.runForMsAtUsBurst(activePulseMs, titrantPumpRunUs, titrantBurstOnMs, titrantBurstOffMs);
-  setState(RunState::Dosing, String("Predose ") + String(consumedGrams, 1) + "/" + String(stoichPredoseTargetGrams, 1) + "g");
-  return true;
-}
-
-bool recordEqpPointIfEnabled() {
-  if (!autoEqpEnabled() || !phReady || !scaleReady) {
-    return false;
-  }
-  bool reached = eqpTracker.add(consumedGrams, activeControlValue());
-  if (eqpTracker.bestUsedGrams > 0.0f) {
-    endpointUsedGrams = eqpTracker.bestUsedGrams;
-  }
-  return reached;
-}
-
-void updateSampleDeliveredFromPumpEstimate() {
-  if (state != RunState::SampleFilling ||
-      sampleFillingStartedMs == 0 ||
-      samplePumpFlowRateGps <= 0.001f ||
-      !samplePump.isRunning()) {
-    return;
-  }
-  float estimated = (float)(millis() - sampleFillingStartedMs) * samplePumpFlowRateGps / 1000.0f;
-  if (estimated > sampleDeliveredGrams) {
-    sampleDeliveredGrams = estimated;
-    if (sampleDeliveredGrams - sampleLastProgressGrams >= 0.2f) {
-      sampleLastProgressGrams = sampleDeliveredGrams;
-      sampleLastProgressMs = millis();
-    }
-  }
 }
 
 String titrantLabel() {
@@ -1200,8 +1114,6 @@ void selectMethod(TitrationMethod method, bool persist) {
   applyTitrationMethodPreset(settings, currentMethod);
   loadMethodAuxIntoSettings(currentMethod);
   phFilter.reset();
-  phDynamics.reset();
-  eqpTracker.reset();
   phReady = false;
   phSampleFresh = false;
   resetRunData();
@@ -1331,122 +1243,24 @@ void tareScale() {
 }
 
 void resetRunData() {
+  runEngine.reset();
+  lastRunOutput = RunOutput{};
   pump.stop();
   samplePump.stop();
   phFilter.reset();
-  phDynamics.reset();
-  eqpTracker.reset();
-  endpointHold.reset();
   scaleFilter.reset(scaleReady ? lastScale.grams : 0.0f);
   sensorFaultCount = 0;
   sensorFault = false;
   sampleStartWeight = scaleReady ? lastScale.grams : 0.0f;
   sampleDeliveredGrams = 0.0f;
-  sampleLastProgressGrams = 0.0f;
-  sampleFillingStartedMs = 0;
-  sampleLastProgressMs = 0;
-  initialBottleWeight = scaleReady ? lastScale.grams : 0.0f;
   consumedGrams = 0.0f;
   endpointUsedGrams = 0.0f;
   resultValue = 0.0f;
-  stoichPredoseTargetGrams = 0.0f;
+  displayedPulseMs = 0;
   phReady = false;
   phSampleFresh = false;
   stopReason = TitrationStopReason::None;
   displayDirty = true;
-}
-
-bool startTitration() {
-  if (httpOtaSafetyLock) {
-    return false;
-  }
-  if (!lastPh.adcOk || !scaleReady || sensorFault) {
-    pump.stop();
-    samplePump.stop();
-    stopReason = TitrationStopReason::InvalidReading;
-    setState(RunState::Error, "Sensor missing");
-    return false;
-  }
-
-  pump.stop();
-  samplePump.stop();
-  phFilter.reset();
-  phDynamics.reset();
-  eqpTracker.reset();
-  scaleFilter.reset(lastScale.grams);
-  sensorFaultCount = 0;
-  sensorFault = false;
-  sampleStartWeight = lastScale.grams;
-  sampleDeliveredGrams = 0.0f;
-  sampleLastProgressGrams = 0.0f;
-  sampleFillingStartedMs = 0;
-  sampleLastProgressMs = 0;
-  initialBottleWeight = lastScale.grams;
-  consumedGrams = 0.0f;
-  endpointUsedGrams = 0.0f;
-  resultValue = 0.0f;
-  refreshStoichPredoseTarget();
-  runStartedMs = 0;
-  phReady = false;
-  stopReason = TitrationStopReason::None;
-  runStartedMs = millis();
-  endpointHold.reset();
-  if (settings.sampleGrams <= 0.01f) {
-    setState(RunState::FilterWarmup, "Stabilizing pH");
-  } else {
-    samplePump.runContinuous();
-    sampleFillingStartedMs = millis();
-    sampleLastProgressMs = sampleFillingStartedMs;
-    sampleLastProgressGrams = 0.0f;
-    setState(RunState::SampleFilling, "Filling sample");
-  }
-  return true;
-}
-
-bool startExistingSampleTitration() {
-  if (httpOtaSafetyLock) {
-    return false;
-  }
-  if (!lastPh.adcOk || !scaleReady || sensorFault) {
-    pump.stop();
-    samplePump.stop();
-    stopReason = TitrationStopReason::InvalidReading;
-    setState(RunState::Error, "Sensor missing");
-    return false;
-  }
-
-  pump.stop();
-  samplePump.stop();
-  phFilter.reset();
-  phDynamics.reset();
-  eqpTracker.reset();
-  scaleFilter.reset(lastScale.grams);
-  sensorFaultCount = 0;
-  sensorFault = false;
-  sampleStartWeight = lastScale.grams;
-  sampleDeliveredGrams = settings.sampleGrams;
-  sampleLastProgressGrams = settings.sampleGrams;
-  sampleFillingStartedMs = 0;
-  sampleLastProgressMs = 0;
-  initialBottleWeight = lastScale.grams;
-  consumedGrams = 0.0f;
-  endpointUsedGrams = 0.0f;
-  resultValue = 0.0f;
-  refreshStoichPredoseTarget();
-  runStartedMs = millis();
-  endpointHold.reset();
-  phReady = false;
-  phSampleFresh = false;
-  stopReason = TitrationStopReason::None;
-  setState(RunState::FilterWarmup, "Existing sample");
-  return true;
-}
-
-void stopTitration(const String &message) {
-  pump.stop();
-  samplePump.stop();
-  stopReason = TitrationStopReason::None;
-  setState(RunState::Done, message);
 }
 
 bool isActiveState() {
@@ -1457,36 +1271,146 @@ bool isActiveState() {
          state == RunState::Settling;
 }
 
-void pauseTitration() {
-  if (!isActiveState()) {
-    return;
+RunState runStateForPhase(RunPhase phase) {
+  switch (phase) {
+    case RunPhase::SampleFilling: return RunState::SampleFilling;
+    case RunPhase::FilterWarmup: return RunState::FilterWarmup;
+    case RunPhase::Running: return RunState::Running;
+    case RunPhase::Dosing: return RunState::Dosing;
+    case RunPhase::Settling: return RunState::Settling;
+    case RunPhase::Paused: return RunState::Paused;
+    case RunPhase::Done: return RunState::Done;
+    case RunPhase::Error: return RunState::Error;
+    case RunPhase::Inactive: return RunState::SetupMode;
   }
-  pausedFromState = state;
-  pump.stop();
-  samplePump.stop();
-  endpointHold.reset();
-  setState(RunState::Paused, "Paused");
+  return RunState::SetupMode;
 }
 
-void resumeTitration() {
-  if (state != RunState::Paused) {
+String runStatusText(RunStatusCode status) {
+  switch (status) {
+    case RunStatusCode::FillingSample: return "Filling sample";
+    case RunStatusCode::WaitingForStableSignal: return "Stabilizing pH";
+    case RunStatusCode::ReStabilizingAfterResume: return "正在重新稳定信号";
+    case RunStatusCode::CheckingEndpoint: return "Checking";
+    case RunStatusCode::Dosing: return "Dosing";
+    case RunStatusCode::Settling: return "Settling";
+    case RunStatusCode::HoldingEndpoint: return "Holding endpoint";
+    case RunStatusCode::Paused: return "Paused";
+    case RunStatusCode::TargetReached: return "Target reached";
+    case RunStatusCode::EquivalencePointReached: return "Equivalence point";
+    case RunStatusCode::SafetyLocked: return "OTA locked";
+    case RunStatusCode::SensorFault: return "Sensor missing";
+    case RunStatusCode::ScaleFailure: return "Scale error";
+    case RunStatusCode::SampleProgressTimeout: return "Sample scale stalled";
+    case RunStatusCode::SampleFillTimeout: return "Sample timeout";
+    case RunStatusCode::MassLimit: return "Mass limit";
+    case RunStatusCode::TimeLimit: return "Time limit";
+    case RunStatusCode::Inactive: return "Ready";
+  }
+  return "Ready";
+}
+
+TitrationStopReason displayStopReason(RunStopReason reason) {
+  switch (reason) {
+    case RunStopReason::TargetReached: return TitrationStopReason::TargetReached;
+    case RunStopReason::EquivalencePoint: return TitrationStopReason::EquivalencePoint;
+    case RunStopReason::MassLimit: return TitrationStopReason::MassLimit;
+    case RunStopReason::TimeLimit: return TitrationStopReason::TimeLimit;
+    case RunStopReason::SensorFault: return TitrationStopReason::SensorFault;
+    case RunStopReason::InvalidReading: return TitrationStopReason::InvalidReading;
+    case RunStopReason::SafetyLock:
+    case RunStopReason::ScaleFailure:
+    case RunStopReason::SampleProgressTimeout:
+    case RunStopReason::SampleFillTimeout:
+    case RunStopReason::None: return TitrationStopReason::None;
+  }
+  return TitrationStopReason::None;
+}
+
+void applyPumpIntent(PumpController &target, const PumpIntent &intent, bool titrant) {
+  if (intent.mode == PumpMode::Stop) {
+    target.stop();
+  } else if (intent.mode == PumpMode::RunContinuous) {
+    target.runContinuous();
+  } else if (intent.mode == PumpMode::RunForMs) {
+    if (titrant) {
+      target.runForMsAtUsBurst(intent.durationMs, titrantPumpRunUs, titrantBurstOnMs, titrantBurstOffMs);
+    } else {
+      target.runForMsAtUs(intent.durationMs, samplePumpRunUs);
+    }
+  }
+}
+
+RunInput buildRunInput(RunCommand command) {
+  RunInput input{};
+  input.nowMs = millis();
+  input.command = command;
+  input.sensor.ph = lastPh.ph;
+  input.sensor.millivolts = lastPh.millivolts;
+  input.sensor.controlValue = activeControlValue();
+  input.sensor.reactorMassGrams = lastScale.grams;
+  input.sensor.consumedTitrantGrams = consumedGrams;
+  input.sensor.deliveredSampleGrams = command == RunCommand::StartExistingSample ? settings.sampleGrams : sampleDeliveredGrams;
+  input.sensor.sensorValid = lastPh.adcOk && phReady && !sensorFault;
+  input.sensor.sensorFresh = phSampleFresh;
+  input.sensor.controlSettled = phFilter.ready();
+  input.sensor.scaleValid = scaleReady;
+  input.context.targetSampleGrams = settings.sampleGrams;
+  input.context.samplePumpFlowRateGps = samplePumpFlowRateGps;
+  input.context.titrantPumpFlowRateGps = titrantPumpFlowRateGps;
+  input.context.maximumTitrantGrams = settings.maxConsumedGrams;
+  input.context.maximumRunMs = (uint32_t)settings.maxTimeSeconds * 1000UL;
+  input.context.settings = settings;
+  input.context.automaticEqp = autoEqpEnabled();
+  input.context.otaLocked = httpOtaSafetyLock;
+  return input;
+}
+
+void applyRunOutput(const RunOutput &output) {
+  const RunPhase previousPhase = lastRunOutput.phase;
+  if (output.titrant.mode != PumpMode::Stop || output.phase != previousPhase) {
+    applyPumpIntent(pump, output.titrant, true);
+  }
+  if (output.sample.mode != PumpMode::Stop || output.phase != previousPhase) {
+    applyPumpIntent(samplePump, output.sample, false);
+  }
+  displayedPulseMs = output.titrant.mode == PumpMode::RunForMs ? output.titrant.durationMs : 0U;
+  stopReason = displayStopReason(output.stopReason);
+  if (output.finalizeResult) {
+    endpointUsedGrams = output.selectedUsedTitrantGrams;
+    consumedGrams = output.selectedUsedTitrantGrams;
+    resultValue = computeTitrationResult(settings, activeTitrantMolarity(), endpointUsedGrams, settings.sampleGrams);
+  }
+  setState(runStateForPhase(output.phase), runStatusText(output.status));
+  lastRunOutput = output;
+}
+
+void dispatchRunCommand(RunCommand command) {
+  const bool startsRun = command == RunCommand::StartNormal || command == RunCommand::StartExistingSample;
+  if (startsRun && (!lastPh.adcOk || !scaleReady || sensorFault)) {
+    pump.stop();
+    samplePump.stop();
+    stopReason = TitrationStopReason::InvalidReading;
+    setState(RunState::Error, "Sensor missing");
     return;
   }
-  if (pausedFromState == RunState::SampleFilling && sampleDeliveredGrams < settings.sampleGrams) {
-    samplePump.runContinuous();
-    sampleFillingStartedMs = millis();
-    sampleLastProgressMs = sampleFillingStartedMs;
-    sampleLastProgressGrams = sampleDeliveredGrams;
-    setState(RunState::SampleFilling, "Filling sample");
-  } else if (pausedFromState == RunState::FilterWarmup || !phReady) {
+  if (command == RunCommand::StartNormal || command == RunCommand::StartExistingSample) {
     pump.stop();
     samplePump.stop();
-    setState(RunState::FilterWarmup, "Stabilizing pH");
-  } else {
-    pump.stop();
-    samplePump.stop();
-    setState(RunState::Running, "Checking");
+    phFilter.reset();
+    scaleFilter.reset(lastScale.grams);
+    sampleStartWeight = lastScale.grams;
+    sampleDeliveredGrams = command == RunCommand::StartExistingSample ? settings.sampleGrams : 0.0f;
+    consumedGrams = 0.0f;
+    endpointUsedGrams = 0.0f;
+    resultValue = 0.0f;
+    phReady = false;
+    phSampleFresh = false;
   }
+  if (command == RunCommand::Reset) {
+    resetRunData();
+  }
+  applyRunOutput(runEngine.step(buildRunInput(command)));
 }
 
 uint32_t stateColor() {
@@ -1655,7 +1579,7 @@ void handleButton(ButtonEvent event) {
       } else if (event == ButtonEvent::B) {
         setState(RunState::Calibrating, "Calibrating pumps");
       } else if (event == ButtonEvent::ABShort) {
-        startTitration();
+        dispatchRunCommand(RunCommand::StartNormal);
       }
       break;
 
@@ -1668,21 +1592,20 @@ void handleButton(ButtonEvent event) {
 
     case RunState::Paused:
       if (event == ButtonEvent::ABShort) {
-        resumeTitration();
+        dispatchRunCommand(RunCommand::Resume);
       }
       break;
 
     case RunState::Done:
     case RunState::Error:
       if (event == ButtonEvent::ABShort) {
-        resetRunData();
-        setState(RunState::SetupMode, "Reset");
+        dispatchRunCommand(RunCommand::Reset);
       }
       break;
 
     default:
       if (event == ButtonEvent::ABShort) {
-        pauseTitration();
+        dispatchRunCommand(RunCommand::Pause);
       }
       break;
   }
@@ -1711,9 +1634,6 @@ void sampleSensors() {
         pump.stop();
         samplePump.stop();
         Serial.println("SENSOR_FAULT");
-        stopReason = TitrationStopReason::SensorFault;
-        endpointHold.reset();
-        setState(RunState::Error, "SENSOR_FAULT");
       }
 
       // Second-stage median-trimmed-mean filter (PhFilter) running in the
@@ -1739,9 +1659,6 @@ void sampleSensors() {
         lastPh.ok = isValidPh(lastPh.ph);
         phReady = lastPh.ok && !sensorFault;
         phSampleFresh = phReady;
-        if (phReady) {
-          phDynamics.add(activeControlValue(), millis());
-        }
       } else {
         phReady = false;
       }
@@ -1761,7 +1678,7 @@ void sampleSensors() {
   lastScale = scaleFilter.apply(rawScale, isActiveState());
   scaleReady = lastScale.ok;
   if (scaleReady) {
-    if (state == RunState::SampleFilling) {
+      if (runEngine.phase() == RunPhase::SampleFilling) {
       float delivered = computeSampleGainGrams(sampleStartWeight, lastScale.grams);
       if (rawScale.ok) {
         float rawDelivered = computeSampleGainGrams(sampleStartWeight, rawScale.grams);
@@ -1771,229 +1688,14 @@ void sampleSensors() {
       }
       if (delivered > sampleDeliveredGrams) {
         sampleDeliveredGrams = delivered;
-        if (sampleDeliveredGrams - sampleLastProgressGrams >= 0.2f) {
-          sampleLastProgressGrams = sampleDeliveredGrams;
-          sampleLastProgressMs = millis();
-        }
       }
-    }
-    float consumed = computeSampleGainGrams(initialBottleWeight, lastScale.grams);
-    if (consumed > consumedGrams) {
-      consumedGrams = consumed;
     }
   }
   displayDirty = true;
 }
 
 void runController() {
-  updatePumpTimeouts();
-
-  if (httpOtaSafetyLock) {
-    pump.stop();
-    samplePump.stop();
-    return;
-  }
-
-  if (state == RunState::SampleFilling) {
-    updateSampleDeliveredFromPumpEstimate();
-
-    if (!scaleReady) {
-      pump.stop();
-      samplePump.stop();
-      stopReason = TitrationStopReason::InvalidReading;
-      setState(RunState::Error, "Scale error");
-      return;
-    }
-
-    if (sampleFillingStartedMs == 0) {
-      sampleFillingStartedMs = millis();
-      sampleLastProgressMs = sampleFillingStartedMs;
-      sampleLastProgressGrams = sampleDeliveredGrams;
-    }
-
-    uint32_t sampleMaxMs = 0;
-    if (samplePumpFlowRateGps > 0.001f && settings.sampleGrams > 0.0f) {
-      sampleMaxMs = (uint32_t)((settings.sampleGrams / samplePumpFlowRateGps) * 1200.0f) + SAMPLE_FILL_EXTRA_MS;
-    }
-    if (sampleMaxMs > 0 && millis() - sampleFillingStartedMs > sampleMaxMs) {
-      pump.stop();
-      samplePump.stop();
-      stopReason = TitrationStopReason::InvalidReading;
-      setState(RunState::Error, "Sample timeout");
-      return;
-    }
-    if (millis() - sampleLastProgressMs > SAMPLE_PROGRESS_TIMEOUT_MS) {
-      pump.stop();
-      samplePump.stop();
-      stopReason = TitrationStopReason::InvalidReading;
-      setState(RunState::Error, "Sample scale stalled");
-      return;
-    }
-
-    if (sampleDeliveredGrams >= settings.sampleGrams) {
-      samplePump.stop();
-      phFilter.reset();
-      phReady = false;
-      float reactorWeight = lastScale.grams;
-      float deliveredByFiltered = computeSampleGainGrams(sampleStartWeight, lastScale.grams);
-      if (sampleDeliveredGrams > deliveredByFiltered) {
-        reactorWeight = sampleStartWeight + sampleDeliveredGrams;
-      }
-      initialBottleWeight = reactorWeight;
-      scaleFilter.reset(reactorWeight);
-      consumedGrams = 0.0f;
-      endpointUsedGrams = 0.0f;
-      eqpTracker.reset();
-      refreshStoichPredoseTarget();
-      setState(RunState::FilterWarmup, "Stabilizing pH");
-    } else {
-      samplePump.runContinuous();
-      statusLine = String("Sample ") + String(sampleDeliveredGrams, 1) + "/" + String(settings.sampleGrams, 1) + "g";
-      displayDirty = true;
-    }
-    return;
-  }
-
-  if (state == RunState::FilterWarmup) {
-    pump.stop();
-    samplePump.stop();
-    if (sensorFault) {
-      return;
-    }
-    if (phReady) {
-      recordEqpPointIfEnabled();
-      setState(RunState::Running, "Checking");
-    }
-    return;
-  }
-
-  if (state == RunState::Dosing && activePulseMs > 0 && millis() - stateStartedMs >= activePulseMs) {
-    pump.stop();
-    setState(RunState::Settling, "Settling");
-    return;
-  }
-  if (state == RunState::Dosing) {
-    return;
-  }
-
-  if (state == RunState::Settling) {
-    pump.stop();
-    uint32_t elapsed = millis() - stateStartedMs;
-    uint16_t settleMs = activeSettleMs > 0 ? activeSettleMs : SETTLING_TIME_MS;
-    if (elapsed < settleMs) {
-      return;
-    }
-    uint32_t maxSettleMs = (uint32_t)settings.maxSettleSeconds * 1000UL;
-    if (maxSettleMs < settleMs) {
-      maxSettleMs = settleMs;
-    }
-    if (elapsed < maxSettleMs && (!phSampleFresh || !phDynamics.isSettledWithin(settings.stableDelta))) {
-      statusLine = String("Settling ") + endpointText();
-      displayDirty = true;
-      return;
-    }
-    if (recordEqpPointIfEnabled()) {
-      pump.stop();
-      stopReason = TitrationStopReason::EquivalencePoint;
-      resultValue = computeCurrentResult();
-      setState(RunState::Done, reasonLabel(stopReason));
-      return;
-    }
-    setState(RunState::Running, "Checking");
-    return;
-  }
-
-  if (state != RunState::Running && state != RunState::Dosing) {
-    return;
-  }
-
-  if (!phSampleFresh) {
-    return;
-  }
-
-  if (!phReady || !scaleReady || sensorFault) {
-    pump.stop();
-    samplePump.stop();
-    stopReason = TitrationStopReason::InvalidReading;
-    if (sensorFault) {
-      stopReason = TitrationStopReason::SensorFault;
-    }
-    setState(RunState::Error, reasonLabel(stopReason));
-    return;
-  }
-
-  if (runStartedMs > 0 && settings.maxTimeSeconds > 0 &&
-      millis() - runStartedMs >= (uint32_t)settings.maxTimeSeconds * 1000UL) {
-    pump.stop();
-    samplePump.stop();
-    stopReason = TitrationStopReason::TimeLimit;
-    setState(RunState::Error, "Time limit");
-    return;
-  }
-
-  if (autoEqpEnabled() && recordEqpPointIfEnabled()) {
-    pump.stop();
-    stopReason = TitrationStopReason::EquivalencePoint;
-    resultValue = computeCurrentResult();
-    setState(RunState::Done, reasonLabel(stopReason));
-    return;
-  }
-
-  if (!autoEqpEnabled()) {
-    bool inRange = isEndpointReached(settings, activeControlValue());
-    bool confirmed = endpointHold.update(
-        phSampleFresh,
-        inRange,
-        settings.holdSeconds,
-        millis());
-    if (inRange) {
-      pump.stop();
-      if (confirmed) {
-        stopReason = TitrationStopReason::TargetReached;
-        resultValue = computeCurrentResult();
-        setState(RunState::Done, reasonLabel(stopReason));
-      } else {
-        statusLine = String("Holding ") + endpointText();
-        displayDirty = true;
-      }
-      return;
-    }
-  }
-
-  if (applyStoichPredoseIfNeeded()) {
-    return;
-  }
-
-  TitrationDecision decision = autoEqpEnabled()
-      ? decideEqpDose(settings, activeControlValue(), consumedGrams, eqpTracker)
-      : decideAdaptiveDose(settings, activeControlValue(), consumedGrams, phDynamics);
-
-  if (decision.action == TitrationAction::Dose) {
-    activePulseMs = scaleTitrantPulseMs(decision.pumpPulseMs, titrantDosePercent);
-    activeSettleMs = decision.settleMs;
-    pump.runForMsAtUsBurst(activePulseMs, titrantPumpRunUs, titrantBurstOnMs, titrantBurstOffMs);
-    setState(RunState::Dosing, String("Pulse ") + String(activePulseMs) + "ms");
-  } else if (decision.action == TitrationAction::Wait) {
-    activePulseMs = 0;
-    activeSettleMs = decision.settleMs;
-    pump.stop();
-    setState(RunState::Settling, String("Watching ") + endpointText());
-  } else if (decision.action == TitrationAction::Done) {
-    bool wasRunning = pump.isRunning();
-    pump.stop();
-    stopReason = decision.reason;
-    if (wasRunning) {
-      setState(RunState::Settling, "Settling");
-    } else {
-      resultValue = computeCurrentResult();
-      setState(RunState::Done, reasonLabel(stopReason));
-    }
-  } else {
-    pump.stop();
-    samplePump.stop();
-    stopReason = decision.reason;
-    setState(RunState::Error, reasonLabel(stopReason));
-  }
+  dispatchRunCommand(RunCommand::Tick);
 }
 
 String htmlEscape(const String &value) {
@@ -2436,7 +2138,6 @@ void handlePanic() {
   if (!requireCommand(WebCommand::EmergencyStop, sessionSlot)) return;
   pump.stop();
   samplePump.stop();
-  activePulseMs = 0;
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -2769,7 +2470,7 @@ void handleSet() {
   }
   commitSettingsCandidate(candidate);
   if (methodChanged) {
-    phFilter.reset(); phDynamics.reset(); eqpTracker.reset();
+    phFilter.reset();
     phReady = false; phSampleFresh = false;
     resetRunData();
     setState(RunState::SetupMode, String("Method ") + methodLabel(currentMethod));
@@ -2781,13 +2482,6 @@ void handleSet() {
     phFilter.reset(); phReady = false;
   }
   if (wifiChanged) saveWifiSettings(wifiSsid, wifiPassword);
-  if (methodChanged || methodFieldChanged || endpointChanged) {
-    endpointHold.reset();
-  }
-  if (endpointChanged) {
-    phDynamics.reset();
-    eqpTracker.reset();
-  }
   statusLine = wifiChanged ? "WiFi saved" : (calibrationChanged ? "Calibration saved" : (methodChanged ? "Method loaded" : "Settings saved"));
   displayDirty = true;
   authManager.recordSuccessfulWrite(sessionSlot, millis());
@@ -2857,23 +2551,22 @@ void handleAction() {
   const char *returnTab = "run";
   if (cmd == "start") {
     if (state == RunState::Paused) {
-      resumeTitration();
+      dispatchRunCommand(RunCommand::Resume);
     } else {
-      startTitration();
+      dispatchRunCommand(RunCommand::StartNormal);
     }
   } else if (cmd == "start_existing") {
     if (state == RunState::Paused) {
-      resumeTitration();
+      dispatchRunCommand(RunCommand::Resume);
     } else {
-      startExistingSampleTitration();
+      dispatchRunCommand(RunCommand::StartExistingSample);
     }
   } else if (cmd == "stop") {
-    pauseTitration();
+    dispatchRunCommand(RunCommand::Pause);
   } else if (cmd == "tare") {
     tareScale();
   } else if (cmd == "reset") {
-    resetRunData();
-    setState(RunState::SetupMode, "Reset");
+    dispatchRunCommand(RunCommand::Reset);
   } else if (cmd == "ready") {
     resetRunData();
     setState(RunState::SetupReady, "Ready for calibration");
@@ -2899,7 +2592,6 @@ void handleAction() {
     returnTab = "cal";
     if (!isActiveState() && state != RunState::Calibrating) {
       phFilter.reset();
-      phDynamics.reset();
       phReady = false;
       phSampleFresh = false;
       statusLine = "pH/mV filter reset";
@@ -2912,7 +2604,6 @@ void handleAction() {
     if (!isActiveState() && state != RunState::Calibrating) {
       stopManualSweep(false);
       samplePump.stop();
-      activePulseMs = manualMs;
       pump.runForMsAtUsBurst(manualMs, manualTitrantUs, manualBurstOnMs, manualBurstOffMs);
       statusLine = String("Manual titrant ") + String(manualMs) + "ms @ " + String(manualTitrantUs) + "us " + String(manualBurstOnMs) + "/" + String(manualBurstOffMs);
       displayDirty = true;
@@ -2922,7 +2613,6 @@ void handleAction() {
     if (!isActiveState() && state != RunState::Calibrating) {
       stopManualSweep(false);
       pump.stop();
-      activePulseMs = 0;
       samplePump.runForMsAtUsBurst(manualMs, manualSampleUs, manualBurstOnMs, manualBurstOffMs);
       statusLine = String("Manual sample ") + String(manualMs) + "ms @ " + String(manualSampleUs) + "us " + String(manualBurstOnMs) + "/" + String(manualBurstOffMs);
       displayDirty = true;
@@ -2967,7 +2657,6 @@ void handleAction() {
     stopManualSweep(false);
     pump.stop();
     samplePump.stop();
-    activePulseMs = 0;
     statusLine = "Manual stop";
     displayDirty = true;
   }
@@ -2996,7 +2685,7 @@ void handleJson() {
   json += ",\"raw_bottle_g\":" + String(scaleReady ? lastScale.rawGrams : -1.0f, 1);
   json += ",\"used_g\":" + String(consumedGrams, 1);
   json += ",\"endpoint_used_g\":" + String(resultConsumedGrams(), 2);
-  json += ",\"predose_target_g\":" + String(stoichPredoseTargetGrams, 1);
+  json += ",\"predose_target_g\":0";
   json += ",\"predose_ratio\":" + String(STOICH_PREDOSE_RATIO, 2);
   json += ",\"sample_g\":" + String(settings.sampleGrams, 1);
   json += ",\"sample_delivered_g\":" + String(sampleDeliveredGrams, 1);
@@ -3013,11 +2702,11 @@ void handleJson() {
   json += ",\"method\":\"" + String(methodValue(currentMethod)) + "\"";
   json += ",\"method_label\":\"" + jsonEscape(methodLabel(currentMethod)) + "\"";
   json += ",\"auto_eqp\":" + String(autoEqpEnabled() ? "true" : "false");
-  json += ",\"eqp_reached\":" + String(eqpTracker.reached ? "true" : "false");
-  json += ",\"eqp_points\":" + String(eqpTracker.count);
-  json += ",\"eqp_used_g\":" + String(eqpTracker.bestUsedGrams, 2);
-  json += ",\"eqp_signal\":" + String(eqpTracker.bestSignal, 1);
-  json += ",\"eqp_slope\":" + String(eqpTracker.bestSlope, 1);
+  json += ",\"eqp_reached\":false";
+  json += ",\"eqp_points\":0";
+  json += ",\"eqp_used_g\":0";
+  json += ",\"eqp_signal\":0";
+  json += ",\"eqp_slope\":0";
   json += ",\"endpoint\":\"" + String(endpointText()) + "\"";
   json += ",\"target_mv\":" + String(settings.targetMillivolts, 0);
   json += ",\"target_ph\":" + String(settings.targetPh, 2);
@@ -3032,7 +2721,7 @@ void handleJson() {
   json += ",\"state\":\"" + stateLabel() + "\"";
   json += ",\"status\":\"" + jsonEscape(statusLine) + "\"";
   json += ",\"pump\":" + String(pump.isRunning() ? "true" : "false");
-  json += ",\"pump_pulse_ms\":" + String(pump.isRunning() ? activePulseMs : 0);
+  json += ",\"pump_pulse_ms\":" + String(pump.isRunning() ? displayedPulseMs : 0);
   json += ",\"sample_pump\":" + String(samplePump.isRunning() ? "true" : "false");
   json += ",\"filter_ready\":" + String(phFilter.ready() ? "true" : "false");
   json += ",\"sensor_fault\":" + String(sensorFault ? "true" : "false");
@@ -3078,8 +2767,6 @@ void enterHttpOtaSafety() {
   stopManualSweep(false);
   pump.stop();
   samplePump.stop();
-  activePulseMs = 0;
-  endpointHold.reset();
   setState(RunState::Error, "OTA upload");
 }
 
@@ -3090,8 +2777,6 @@ void failHttpOta(const String &detail) {
   stopManualSweep(false);
   pump.stop();
   samplePump.stop();
-  activePulseMs = 0;
-  endpointHold.reset();
   setState(RunState::Error, detail.length() > 0 ? detail : "OTA failed");
 }
 
@@ -3471,7 +3156,6 @@ void setup() {
     scaleFilter.reset(rawScale.ok ? rawScale.grams : 0.0f);
     lastScale = scaleFilter.apply(rawScale, false);
     scaleReady = lastScale.ok;
-    initialBottleWeight = lastScale.grams;
     setState(RunState::SetupMode, "Ready");
   }
 }
