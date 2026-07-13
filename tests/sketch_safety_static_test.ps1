@@ -48,6 +48,8 @@ Assert-Match 'function newRunRecord\(\)' 'record initializer exists'
 Assert-Match 'function observeRunRecord\(d\)' 'record observer exists'
 Assert-Match 'function renderRunRecord\(\)' 'record renderer exists'
 Assert-Match 'runRecord\.confirmed=completed' 'aborted records remain unconfirmed'
+Assert-Match 'runRecord\.points=d\.adc_ok&&curve\.length\?\[recordCopy\(curve\[curve\.length-1\]\)\]:\[\]' 'first active telemetry starts empty or with only its current curve point'
+Assert-Match 'else if\(runRecord&&runRecord\.startedAt&&d\.adc_ok&&curve\.length\)\{runRecord\.points\.push\(recordCopy\(curve\[curve\.length-1\]\)\)\}' 'later active telemetry appends independently of idle curve history'
 $recordControl = [regex]::Match($sketch, 'var runRecord=null;[\s\S]*?(?=page \+= F\("async function poll)').Value
 if (-not $recordControl) { throw 'FAIL: could not inspect browser record control path' }
 if ($recordControl -match '/action|/set|/ota|apiPost') { throw 'FAIL: record control path must not control device' }
