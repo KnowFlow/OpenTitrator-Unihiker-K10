@@ -960,6 +960,59 @@ int main() {
     RunOutput phase4Reset = interruptEngine.step(resetRun);
     expectEqual(phase4Reset.phase, RunPhase::Inactive, "Phase 4 reset clears paused predose state");
     expectPumpsStopped(phase4Reset);
+
+    RunEngine doneResetEngine;
+    enterRunning(doneResetEngine);
+    RunInput endpoint = runningTick(10U, 7.0f);
+    endpoint.sensor.consumedTitrantGrams = 0.4f;
+    endpoint.sensor.reactorMassGrams = 100.4f;
+    RunOutput done = doneResetEngine.step(endpoint);
+    expectEqual(done.phase, RunPhase::Done, "Phase 4 endpoint completes before reset");
+    expectTrue(done.finalizeResult, "Phase 4 completed run emits finalization before reset");
+    expectNear(
+        done.selectedUsedTitrantGrams, 0.4f, 0.001f,
+        "Phase 4 completed run selects its final mass before reset");
+
+    RunOutput resetAfterDone = doneResetEngine.step(resetRun);
+    expectEqual(resetAfterDone.phase, RunPhase::Inactive, "Phase 4 reset leaves done inactive");
+    expectTrue(resetAfterDone.stopReason == RunStopReason::None, "Phase 4 reset clears done reason");
+    expectTrue(!resetAfterDone.finalizeResult, "Phase 4 reset clears done finalization");
+    expectNear(
+        resetAfterDone.selectedUsedTitrantGrams, 0.0f, 0.001f,
+        "Phase 4 reset clears done selected mass");
+    expectPumpsStopped(resetAfterDone);
+
+    RunOutput freshAfterDone = doneResetEngine.step(startNormal(3.0f, 20U));
+    expectEqual(
+        freshAfterDone.phase,
+        RunPhase::SampleFilling,
+        "Phase 4 reset after done allows a fresh run");
+    expectPumpStopped(freshAfterDone.titrant, "Phase 4 fresh done-reset run keeps titrant stopped");
+
+    RunEngine errorResetEngine;
+    enterRunning(errorResetEngine);
+    RunInput invalidSensor = runningTick(10U, 5.0f);
+    invalidSensor.sensor.sensorValid = false;
+    RunOutput error = errorResetEngine.step(invalidSensor);
+    expectEqual(error.phase, RunPhase::Error, "Phase 4 sensor fault enters error before reset");
+    expectTrue(error.stopReason == RunStopReason::SensorFault, "Phase 4 error retains its reason before reset");
+    expectPumpsStopped(error);
+
+    RunOutput resetAfterError = errorResetEngine.step(resetRun);
+    expectEqual(resetAfterError.phase, RunPhase::Inactive, "Phase 4 reset leaves error inactive");
+    expectTrue(resetAfterError.stopReason == RunStopReason::None, "Phase 4 reset clears error reason");
+    expectTrue(!resetAfterError.finalizeResult, "Phase 4 reset after error has no finalization");
+    expectNear(
+        resetAfterError.selectedUsedTitrantGrams, 0.0f, 0.001f,
+        "Phase 4 reset after error clears selected mass");
+    expectPumpsStopped(resetAfterError);
+
+    RunOutput freshAfterError = errorResetEngine.step(startNormal(3.0f, 20U));
+    expectEqual(
+        freshAfterError.phase,
+        RunPhase::SampleFilling,
+        "Phase 4 reset after error allows a fresh run");
+    expectPumpStopped(freshAfterError.titrant, "Phase 4 fresh error-reset run keeps titrant stopped");
   }
 
   if (failures != 0) {
