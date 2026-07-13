@@ -40,6 +40,19 @@ Assert-Match 'RunTelemetry telemetry = runEngine\.telemetry\(\);' 'JSON reads it
 Assert-Match 'String\(telemetry\.predoseTargetGrams, 2\)' 'JSON exposes engine-owned predose telemetry'
 Assert-Match 'String\(telemetry\.eqpPointCount\)' 'JSON exposes engine-owned EQP telemetry'
 
+Assert-Match "id='recordSampleId'" 'record sample metadata field exists'
+Assert-Match "id='recordBatchReference'" 'record batch/reference metadata field exists'
+Assert-Match "id='recordOperator'" 'record operator metadata field exists'
+Assert-Match "id='recordNotes'" 'record notes metadata field exists'
+Assert-Match 'function newRunRecord\(\)' 'record initializer exists'
+Assert-Match 'function observeRunRecord\(d\)' 'record observer exists'
+Assert-Match 'function renderRunRecord\(\)' 'record renderer exists'
+Assert-Match 'runRecord\.confirmed=completed' 'aborted records remain unconfirmed'
+$recordControl = [regex]::Match($sketch, 'var runRecord=null;[\s\S]*?(?=page \+= F\("async function poll)').Value
+if (-not $recordControl) { throw 'FAIL: could not inspect browser record control path' }
+if ($recordControl -match '/action|/set|/ota|apiPost') { throw 'FAIL: record control path must not control device' }
+Assert-Match 'recordCurve\(d\);[\s\S]*?observeRunRecord\(d\);' 'record observer runs after curve recorder'
+
 foreach ($legacy in @(
   'TitrationDynamics\s+phDynamics',
   'EqpTracker\s+eqpTracker',
