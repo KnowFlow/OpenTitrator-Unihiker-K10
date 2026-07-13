@@ -30,6 +30,13 @@ void expectEqual(RunStatusCode actual, RunStatusCode expected, const char *name)
   }
 }
 
+void expectNear(float actual, float expected, float tolerance, const char *name) {
+  if (actual < expected - tolerance || actual > expected + tolerance) {
+    std::cerr << "FAIL: " << name << "\n";
+    ++failures;
+  }
+}
+
 void expectPumpStopped(const PumpIntent &intent, const char *name) {
   expectTrue(intent.mode == PumpMode::Stop, name);
   expectTrue(intent.durationMs == 0U, "stopped pump has no duration");
@@ -717,6 +724,120 @@ int main() {
     resetRun.command = RunCommand::Reset;
     resetStateEngine.step(resetRun);
     expectEqual(resetStateEngine.phase(), RunPhase::Inactive, "reset clears active lifecycle state");
+  }
+
+  // ---- Phase 4: engine-owned EQP history and predose ----
+  {
+    RunEngine eqpEngine;
+    enterRunning(eqpEngine);
+    const float signals[] = {300.0f, 295.0f, 280.0f, 276.0f, 274.0f};
+    const float used[] = {0.0f, 0.1f, 0.2f, 0.3f, 0.4f};
+    for (size_t i = 0U; i < 5U; ++i) {
+      RunInput point = runningTick(10U + static_cast<uint32_t>(i) * 1000U, signals[i]);
+      point.context.automaticEqp = true;
+      point.context.settings.minSettleSeconds = 0U;
+      point.context.settings.maxSettleSeconds = 0U;
+      point.context.settings.endpoint = ControlEndpoint::Millivolts;
+      point.sensor.consumedTitrantGrams = used[i];
+      point.sensor.reactorMassGrams = 100.0f + used[i];
+      RunOutput output = eqpEngine.step(point);
+      expectTrue(output.recordEqpPoint, "fresh EQP mass records one point");
+      if (i < 4U) {
+        expectEqual(output.phase, RunPhase::Dosing, "unconfirmed EQP makes only its decided dose");
+        RunInput pulseDone = point;
+        pulseDone.nowMs += 200U;
+        eqpEngine.step(pulseDone);
+        RunInput settleDone = point;
+        settleDone.nowMs += 201U;
+        eqpEngine.step(settleDone);
+      } else {
+        expectEqual(output.phase, RunPhase::Done, "confirmed EQP completes the run");
+        expectTrue(output.finalizeResult, "confirmed EQP finalizes once");
+        expectNear(output.selectedUsedTitrantGrams, 0.2f, 0.001f, "EQP finalization selects peak mass");
+      }
+    }
+    RunInput afterDone = runningTick(6000U, 274.0f);
+    afterDone.context.automaticEqp = true;
+    RunOutput repeated = eqpEngine.step(afterDone);
+    expectTrue(!repeated.finalizeResult, "done EQP never repeats finalization");
+    expectTrue(!repeated.recordEqpPoint, "done EQP never records another point");
+    expectPumpsStopped(repeated);
+  }
+
+  {
+    RunEngine duplicateEqpEngine;
+    enterRunning(duplicateEqpEngine);
+    RunInput point = runningTick(10U, 300.0f);
+    point.context.automaticEqp = true;
+    point.context.settings.endpoint = ControlEndpoint::Millivolts;
+    point.context.settings.minSettleSeconds = 0U;
+    point.context.settings.maxSettleSeconds = 0U;
+    point.sensor.reactorMassGrams = 100.0f;
+    expectTrue(duplicateEqpEngine.step(point).recordEqpPoint, "first EQP point is accepted");
+    point.nowMs = 210U;
+    duplicateEqpEngine.step(point);
+    point.nowMs = 211U;
+    duplicateEqpEngine.step(point);
+    point.nowMs = 212U;
+    RunOutput duplicate = duplicateEqpEngine.step(point);
+    expectTrue(!duplicate.recordEqpPoint, "same EQP mass is not recorded twice");
+  }
+
+  {
+    RunEngine endpointMassEngine;
+    enterRunning(endpointMassEngine);
+    RunInput endpoint = runningTick(10U, 7.0f);
+    endpoint.sensor.consumedTitrantGrams = 0.4f;
+    endpoint.sensor.reactorMassGrams = 100.4f;
+    RunOutput complete = endpointMassEngine.step(endpoint);
+    expectTrue(complete.finalizeResult, "ordinary endpoint finalizes once");
+    expectNear(
+        complete.selectedUsedTitrantGrams, 0.4f, 0.001f,
+        "ordinary endpoint selects engine-owned consumed mass");
+  }
+
+  {
+    RunEngine predoseEngine;
+    enterRunning(predoseEngine);
+    RunInput predose = runningTick(10U, 5.0f);
+    predose.context.maximumTitrantGrams = 10.0f;
+    predose.context.titrantPumpFlowRateGps = 1.0f;
+    predose.context.settings.maxConsumedGrams = 20.0f;
+    predose.context.settings.minSettleSeconds = 1U;
+    predose.context.settings.maxSettleSeconds = 3U;
+    predose.sensor.reactorMassGrams = 100.0f;
+    RunOutput firstPredose = predoseEngine.step(predose);
+    expectEqual(firstPredose.phase, RunPhase::Dosing, "applicable chemistry begins predose");
+    expectTrue(firstPredose.titrant.mode == PumpMode::RunForMs, "predose commands a titrant pulse");
+    expectTrue(firstPredose.titrant.durationMs == 2000U, "predose uses calibrated two gram step");
+
+    RunOutput predoseSettling = predoseEngine.step(runningTick(2010U, 5.0f));
+    expectEqual(predoseSettling.phase, RunPhase::Settling, "predose pulse enters settling");
+    expectTrue(predoseSettling.hasRequestedSettleMs, "predose exposes its settle metadata");
+    expectTrue(predoseSettling.requestedSettleMs == 3000U, "predose settle clamps to settings");
+
+    RunInput fallback = runningTick(6000U, 5.0f);
+    fallback.context.maximumTitrantGrams = 10.0f;
+    fallback.context.titrantPumpFlowRateGps = std::numeric_limits<float>::quiet_NaN();
+    fallback.context.settings.maxConsumedGrams = 20.0f;
+    fallback.sensor.reactorMassGrams = 102.0f;
+    predoseEngine.step(fallback);
+    fallback.nowMs = 6001U;
+    RunOutput secondPredose = predoseEngine.step(fallback);
+    expectEqual(secondPredose.phase, RunPhase::Dosing, "predose continues below target");
+    expectTrue(secondPredose.titrant.durationMs == 2000U, "unsafe flow uses fallback pulse without casting");
+
+    RunEngine tinyDurationEngine;
+    enterRunning(tinyDurationEngine);
+    RunInput tinyDuration = runningTick(10U, 5.0f);
+    tinyDuration.context.maximumTitrantGrams = 10.0f;
+    tinyDuration.context.titrantPumpFlowRateGps = 1.0e38f;
+    tinyDuration.context.settings.maxConsumedGrams = 20.0f;
+    tinyDuration.sensor.reactorMassGrams = 100.0f;
+    RunOutput safeDuration = tinyDurationEngine.step(tinyDuration);
+    expectTrue(
+        safeDuration.titrant.durationMs == 2000U,
+        "sub-millisecond calibrated duration uses fallback without truncating to zero");
   }
 
   if (failures != 0) {

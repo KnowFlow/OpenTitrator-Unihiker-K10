@@ -91,9 +91,11 @@ struct SensorSnapshot {
 struct RunContext {
   float targetSampleGrams = 0.0f;
   float samplePumpFlowRateGps = 0.0f;
+  float titrantPumpFlowRateGps = 0.0f;
   float maximumTitrantGrams = 0.0f;
   uint32_t maximumRunMs = 0U;
   TitrationSettings settings{};
+  bool automaticEqp = false;
   bool otaLocked = false;
 };
 
@@ -112,6 +114,7 @@ struct RunOutput {
   RunStopReason stopReason = RunStopReason::None;
   bool finalizeResult = false;
   bool recordEqpPoint = false;
+  float selectedUsedTitrantGrams = 0.0f;
   bool hasRequestedSettleMs = false;
   uint32_t requestedSettleMs = 0U;
 };

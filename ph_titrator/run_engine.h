@@ -28,6 +28,16 @@ private:
   uint32_t activePulseMs_;
   uint32_t activeSettleMs_;
   uint32_t activeMaxSettleMs_;
+  EqpTracker eqpTracker_;
+  float initialReactorMassGrams_;
+  float consumedTitrantGrams_;
+  float endpointUsedTitrantGrams_;
+  float predoseTargetGrams_;
+  bool hasInitialReactorMass_;
+  bool hasEndpointUsedTitrantGrams_;
+  bool finalizationEmitted_;
+
+  void resetExperimentHistory();
 };
 
 #endif

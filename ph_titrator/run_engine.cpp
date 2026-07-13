@@ -10,6 +10,11 @@ const float kMinimumKnownSampleFlowRateGps = 0.001f;
 const float kSampleFillDurationMultiplierMs = 1200.0f;
 const float kSampleFillAllowanceMs = 5000.0f;
 const float kMaximumUint32AsFloat = 4294967295.0f;
+const float kPredoseRatio = 0.70f;
+const float kPredoseStepGrams = 2.0f;
+const uint32_t kPredoseFallbackPulseMs = 2000U;
+const uint32_t kPredoseMaximumPulseMs = 5000U;
+const uint16_t kPredoseSettleMs = 6000U;
 
 bool maximumFillDurationMs(const RunContext &context, uint32_t &durationMs) {
   if (!std::isfinite(context.samplePumpFlowRateGps) ||
@@ -31,6 +36,36 @@ bool maximumFillDurationMs(const RunContext &context, uint32_t &durationMs) {
 
 uint32_t settleLimitMs(uint16_t seconds) {
   return static_cast<uint32_t>(seconds) * 1000UL;
+}
+
+bool isFiniteNonNegative(float value) {
+  return std::isfinite(value) && value >= 0.0f;
+}
+
+bool validPredoseChemistry(const RunContext &context) {
+  const TitrationSettings &settings = context.settings;
+  return settings.endpoint == ControlEndpoint::Ph &&
+         settings.resultFormula == ResultFormula::AcidBaseMolar &&
+         std::isfinite(context.maximumTitrantGrams) && context.maximumTitrantGrams > 0.0f &&
+         std::isfinite(settings.maxConsumedGrams) && settings.maxConsumedGrams > 0.0f &&
+         std::isfinite(settings.sampleGrams) && settings.sampleGrams > 0.0f &&
+         std::isfinite(settings.titrantDensityGramsPerMl) &&
+         settings.titrantDensityGramsPerMl > 0.0f &&
+         std::isfinite(settings.sampleDensityGramsPerMl) &&
+         settings.sampleDensityGramsPerMl > 0.0f;
+}
+
+uint32_t predosePulseMs(float grams, float flowRateGps) {
+  if (std::isfinite(flowRateGps) && flowRateGps > 0.0f) {
+    const float requestedMs = grams / flowRateGps * 1000.0f;
+    if (std::isfinite(requestedMs) && requestedMs >= 1.0f) {
+      const float cappedMs = requestedMs > static_cast<float>(kPredoseMaximumPulseMs)
+                                 ? static_cast<float>(kPredoseMaximumPulseMs)
+                                 : requestedMs;
+      return static_cast<uint32_t>(cappedMs);
+    }
+  }
+  return kPredoseFallbackPulseMs;
 }
 
 RunStopReason stopReasonForDecision(TitrationStopReason reason) {
@@ -65,7 +100,15 @@ RunEngine::RunEngine()
       settleStartedAtMs_(0U),
       activePulseMs_(0U),
       activeSettleMs_(0U),
-      activeMaxSettleMs_(0U) {}
+      activeMaxSettleMs_(0U),
+      eqpTracker_{},
+      initialReactorMassGrams_(0.0f),
+      consumedTitrantGrams_(0.0f),
+      endpointUsedTitrantGrams_(0.0f),
+      predoseTargetGrams_(0.0f),
+      hasInitialReactorMass_(false),
+      hasEndpointUsedTitrantGrams_(false),
+      finalizationEmitted_(false) {}
 
 RunOutput RunEngine::step(const RunInput &input) {
   RunOutput output{};
@@ -89,6 +132,7 @@ RunOutput RunEngine::step(const RunInput &input) {
     activePulseMs_ = 0U;
     activeSettleMs_ = 0U;
     activeMaxSettleMs_ = 0U;
+    resetExperimentHistory();
     if (input.command == RunCommand::StartNormal && input.context.targetSampleGrams > 0.01f) {
       phase_ = RunPhase::SampleFilling;
       fillStartedAtMs_ = input.nowMs;
@@ -113,6 +157,7 @@ RunOutput RunEngine::step(const RunInput &input) {
   if (input.command == RunCommand::Tick && phaseAtTick == RunPhase::SampleFilling) {
     if (input.sensor.deliveredSampleGrams >= input.context.targetSampleGrams) {
       phase_ = RunPhase::FilterWarmup;
+      resetExperimentHistory();
     } else {
       if (input.sensor.deliveredSampleGrams >= lastSampleProgressGrams_ + kSampleProgressGrams) {
         lastSampleProgressGrams_ = input.sensor.deliveredSampleGrams;
@@ -144,7 +189,23 @@ RunOutput RunEngine::step(const RunInput &input) {
       phase_ = RunPhase::Error;
       stopReason_ = RunStopReason::ScaleFailure;
     } else if (input.sensor.sensorFresh) {
-      if (input.sensor.consumedTitrantGrams >= settings_.maxConsumedGrams) {
+      if (!hasInitialReactorMass_ && isFiniteNonNegative(input.sensor.reactorMassGrams)) {
+        initialReactorMassGrams_ = input.sensor.reactorMassGrams;
+        hasInitialReactorMass_ = true;
+      }
+      if (hasInitialReactorMass_ && isFiniteNonNegative(input.sensor.reactorMassGrams)) {
+        const float scaleConsumed =
+            computeSampleGainGrams(initialReactorMassGrams_, input.sensor.reactorMassGrams);
+        if (scaleConsumed > consumedTitrantGrams_) {
+          consumedTitrantGrams_ = scaleConsumed;
+        }
+      }
+      if (isFiniteNonNegative(input.sensor.consumedTitrantGrams) &&
+          input.sensor.consumedTitrantGrams > consumedTitrantGrams_) {
+        consumedTitrantGrams_ = input.sensor.consumedTitrantGrams;
+      }
+
+      if (consumedTitrantGrams_ >= settings_.maxConsumedGrams) {
         phase_ = RunPhase::Error;
         stopReason_ = RunStopReason::MassLimit;
       } else if (settings_.maxTimeSeconds > 0U && elapsedAtLeast(
@@ -155,20 +216,34 @@ RunOutput RunEngine::step(const RunInput &input) {
         stopReason_ = RunStopReason::TimeLimit;
       } else {
         dynamics_.add(input.sensor.controlValue, input.nowMs);
-        const bool inEndpoint = isEndpointReached(settings_, input.sensor.controlValue);
-        if (endpointHold_.update(true, inEndpoint, settings_.holdSeconds, input.nowMs)) {
-          phase_ = RunPhase::Done;
-          stopReason_ = RunStopReason::TargetReached;
-          output.finalizeResult = true;
-        } else if (endpointHold_.active()) {
-          output.status = RunStatusCode::HoldingEndpoint;
-        } else {
-          const TitrationDecision decision = decideAdaptiveDose(
-              settings_, input.sensor.controlValue, input.sensor.consumedTitrantGrams, dynamics_);
-          if (decision.action == TitrationAction::Error) {
+        if (input.context.automaticEqp) {
+          if (!isValidControlValue(settings_, input.sensor.controlValue)) {
             phase_ = RunPhase::Error;
-            stopReason_ = stopReasonForDecision(decision.reason);
-          } else if (decision.action == TitrationAction::Dose) {
+            stopReason_ = RunStopReason::InvalidReading;
+          } else {
+            const bool isNewPoint =
+                eqpTracker_.count == 0U ||
+                absoluteFloat(consumedTitrantGrams_ - eqpTracker_.usedGrams[eqpTracker_.count - 1U]) >=
+                    0.01f;
+            eqpTracker_.add(consumedTitrantGrams_, input.sensor.controlValue);
+            output.recordEqpPoint = isNewPoint;
+            const TitrationDecision decision =
+                decideEqpDose(settings_, input.sensor.controlValue, consumedTitrantGrams_, eqpTracker_);
+            if (decision.action == TitrationAction::Error) {
+              phase_ = RunPhase::Error;
+              stopReason_ = stopReasonForDecision(decision.reason);
+            } else if (decision.action == TitrationAction::Done) {
+            phase_ = RunPhase::Done;
+            stopReason_ = RunStopReason::EquivalencePoint;
+            if (!finalizationEmitted_) {
+              endpointUsedTitrantGrams_ =
+                  eqpTracker_.bestSlope > 0.0f ? eqpTracker_.bestUsedGrams : consumedTitrantGrams_;
+              hasEndpointUsedTitrantGrams_ = true;
+              finalizationEmitted_ = true;
+              output.finalizeResult = true;
+              output.selectedUsedTitrantGrams = endpointUsedTitrantGrams_;
+            }
+            } else if (decision.action == TitrationAction::Dose) {
             phase_ = RunPhase::Dosing;
             pulseStartedAtMs_ = input.nowMs;
             activePulseMs_ = decision.pumpPulseMs;
@@ -179,7 +254,67 @@ RunOutput RunEngine::step(const RunInput &input) {
             }
             output.titrant.mode = PumpMode::RunForMs;
             output.titrant.durationMs = activePulseMs_;
-          } else if (decision.action == TitrationAction::Wait) {
+            }
+          }
+        } else if (endpointHold_.update(
+                       true, isEndpointReached(settings_, input.sensor.controlValue),
+                       settings_.holdSeconds, input.nowMs)) {
+          phase_ = RunPhase::Done;
+          stopReason_ = RunStopReason::TargetReached;
+          if (!finalizationEmitted_) {
+            endpointUsedTitrantGrams_ = consumedTitrantGrams_;
+            hasEndpointUsedTitrantGrams_ = true;
+            finalizationEmitted_ = true;
+            output.finalizeResult = true;
+            output.selectedUsedTitrantGrams = endpointUsedTitrantGrams_;
+          }
+        } else if (endpointHold_.active()) {
+          output.status = RunStatusCode::HoldingEndpoint;
+        } else {
+          const float target = controlTarget(settings_);
+          const float error = absoluteFloat(input.sensor.controlValue - target);
+          if (validPredoseChemistry(input.context)) {
+            const float uncappedTarget = input.context.maximumTitrantGrams * kPredoseRatio;
+            predoseTargetGrams_ = uncappedTarget > settings_.maxConsumedGrams
+                                      ? settings_.maxConsumedGrams
+                                      : uncappedTarget;
+          } else {
+            predoseTargetGrams_ = 0.0f;
+          }
+          const bool canPredose = predoseTargetGrams_ > consumedTitrantGrams_ &&
+                                  error > settings_.controlBand * 3.0f &&
+                                  !dynamics_.isSteep(settings_.endpoint);
+          if (canPredose) {
+            const float remainingGrams = predoseTargetGrams_ - consumedTitrantGrams_;
+            const float stepGrams = remainingGrams > kPredoseStepGrams ? kPredoseStepGrams : remainingGrams;
+            phase_ = RunPhase::Dosing;
+            pulseStartedAtMs_ = input.nowMs;
+            activePulseMs_ = predosePulseMs(stepGrams, input.context.titrantPumpFlowRateGps);
+            activeSettleMs_ = clampSettleMs(settings_, kPredoseSettleMs);
+            activeMaxSettleMs_ = settleLimitMs(settings_.maxSettleSeconds);
+            if (activeMaxSettleMs_ < activeSettleMs_) {
+              activeMaxSettleMs_ = activeSettleMs_;
+            }
+            output.titrant.mode = PumpMode::RunForMs;
+            output.titrant.durationMs = activePulseMs_;
+          } else {
+            const TitrationDecision decision = decideAdaptiveDose(
+                settings_, input.sensor.controlValue, consumedTitrantGrams_, dynamics_);
+            if (decision.action == TitrationAction::Error) {
+              phase_ = RunPhase::Error;
+              stopReason_ = stopReasonForDecision(decision.reason);
+            } else if (decision.action == TitrationAction::Dose) {
+            phase_ = RunPhase::Dosing;
+            pulseStartedAtMs_ = input.nowMs;
+            activePulseMs_ = decision.pumpPulseMs;
+            activeSettleMs_ = decision.settleMs;
+            activeMaxSettleMs_ = settleLimitMs(settings_.maxSettleSeconds);
+            if (activeMaxSettleMs_ < activeSettleMs_) {
+              activeMaxSettleMs_ = activeSettleMs_;
+            }
+            output.titrant.mode = PumpMode::RunForMs;
+            output.titrant.durationMs = activePulseMs_;
+            } else if (decision.action == TitrationAction::Wait) {
             phase_ = RunPhase::Settling;
             settleStartedAtMs_ = input.nowMs;
             activePulseMs_ = 0U;
@@ -188,10 +323,17 @@ RunOutput RunEngine::step(const RunInput &input) {
             if (activeMaxSettleMs_ < activeSettleMs_) {
               activeMaxSettleMs_ = activeSettleMs_;
             }
-          } else if (decision.action == TitrationAction::Done) {
+            } else if (decision.action == TitrationAction::Done) {
             phase_ = RunPhase::Done;
             stopReason_ = RunStopReason::TargetReached;
-            output.finalizeResult = true;
+            if (!finalizationEmitted_) {
+              endpointUsedTitrantGrams_ = consumedTitrantGrams_;
+              hasEndpointUsedTitrantGrams_ = true;
+              finalizationEmitted_ = true;
+              output.finalizeResult = true;
+              output.selectedUsedTitrantGrams = endpointUsedTitrantGrams_;
+            }
+            }
           }
         }
       }
@@ -279,6 +421,18 @@ void RunEngine::reset() {
   activePulseMs_ = 0U;
   activeSettleMs_ = 0U;
   activeMaxSettleMs_ = 0U;
+  resetExperimentHistory();
+}
+
+void RunEngine::resetExperimentHistory() {
+  eqpTracker_.reset();
+  initialReactorMassGrams_ = 0.0f;
+  consumedTitrantGrams_ = 0.0f;
+  endpointUsedTitrantGrams_ = 0.0f;
+  predoseTargetGrams_ = 0.0f;
+  hasInitialReactorMass_ = false;
+  hasEndpointUsedTitrantGrams_ = false;
+  finalizationEmitted_ = false;
 }
 
 RunPhase RunEngine::phase() const {
