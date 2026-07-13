@@ -23,7 +23,8 @@ enum class RunCommand : uint8_t {
   StartExistingSample = 2,
   Pause = 3,
   Resume = 4,
-  Reset = 5
+  Reset = 5,
+  EmergencyStop = 6
 };
 
 enum class RunStatusCode : uint8_t {
@@ -45,6 +46,7 @@ enum class RunStatusCode : uint8_t {
   MassLimit = 15,
   TimeLimit = 16,
   ReStabilizingAfterResume = 17,
+  EmergencyStopped = 18,
   OtaSafetyLock = SafetyLocked
 };
 
@@ -60,6 +62,7 @@ enum class RunStopReason : uint8_t {
   MassLimit = 8,
   TimeLimit = 9,
   InvalidReading = 10,
+  EmergencyStop = 11,
   OtaSafetyLock = SafetyLock
 };
 
@@ -117,6 +120,15 @@ struct RunOutput {
   float selectedUsedTitrantGrams = 0.0f;
   bool hasRequestedSettleMs = false;
   uint32_t requestedSettleMs = 0U;
+};
+
+struct RunTelemetry {
+  float predoseTargetGrams = 0.0f;
+  uint8_t eqpPointCount = 0U;
+  bool eqpReached = false;
+  float eqpUsedGrams = 0.0f;
+  float eqpSignal = 0.0f;
+  float eqpSlope = 0.0f;
 };
 
 #endif

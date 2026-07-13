@@ -128,6 +128,27 @@ int main() {
   expectEqual(unknownOutput.phase, RunPhase::Inactive, "unknown command is a no-op");
   expectPumpsStopped(unknownOutput);
 
+  RunEngine emergencyEngine;
+  enterRunning(emergencyEngine);
+  RunOutput dosingBeforeEmergency = emergencyEngine.step(runningTick(10U, 5.0f));
+  expectEqual(dosingBeforeEmergency.phase, RunPhase::Dosing, "emergency test begins with a live dose");
+  RunInput emergency = tickInput();
+  emergency.command = RunCommand::EmergencyStop;
+  RunOutput emergencyStopped = emergencyEngine.step(emergency);
+  expectEqual(emergencyStopped.phase, RunPhase::Done, "emergency stop terminally completes the engine");
+  expectEqual(emergencyStopped.status, RunStatusCode::EmergencyStopped, "emergency stop has a stable status");
+  expectTrue(emergencyStopped.stopReason == RunStopReason::EmergencyStop, "emergency stop keeps its reason");
+  expectPumpsStopped(emergencyStopped);
+  RunOutput tickAfterEmergency = emergencyEngine.step(tickInput());
+  expectEqual(tickAfterEmergency.phase, RunPhase::Done, "tick cannot restart an emergency-stopped engine");
+  expectPumpsStopped(tickAfterEmergency);
+  RunOutput startAfterEmergency = emergencyEngine.step(startExistingSample(20U));
+  expectEqual(startAfterEmergency.phase, RunPhase::Done, "emergency stop requires Reset before another run");
+  expectPumpsStopped(startAfterEmergency);
+  emergencyEngine.step(RunInput{21U, RunCommand::Reset});
+  RunOutput startAfterEmergencyReset = emergencyEngine.step(startExistingSample(22U));
+  expectEqual(startAfterEmergencyReset.phase, RunPhase::FilterWarmup, "Reset permits a new run after emergency stop");
+
   RunInput lockedStart = tickInput();
   lockedStart.command = RunCommand::StartNormal;
   lockedStart.context.otaLocked = true;
@@ -763,6 +784,11 @@ int main() {
     expectTrue(!repeated.finalizeResult, "done EQP never repeats finalization");
     expectTrue(!repeated.recordEqpPoint, "done EQP never records another point");
     expectPumpsStopped(repeated);
+    RunTelemetry eqpTelemetry = eqpEngine.telemetry();
+    expectTrue(eqpTelemetry.eqpPointCount == 5U, "EQP telemetry reports engine-owned point count");
+    expectTrue(eqpTelemetry.eqpReached, "EQP telemetry reports confirmed equivalence point");
+    expectNear(eqpTelemetry.eqpUsedGrams, 0.2f, 0.001f, "EQP telemetry reports peak mass");
+    expectNear(eqpTelemetry.eqpSignal, 280.0f, 0.001f, "EQP telemetry reports peak signal");
   }
 
   {
@@ -819,6 +845,8 @@ int main() {
     RunOutput targetPulse = targetEngine.step(target);
     expectTrue(targetPulse.titrant.durationMs == 2000U,
                "predose target uses sample milliliters times titrant density times 70 percent");
+    expectNear(targetEngine.telemetry().predoseTargetGrams, 7.0f, 0.001f,
+               "predose telemetry reports engine-owned target");
 
     RunEngine cappedTargetEngine;
     enterRunning(cappedTargetEngine);

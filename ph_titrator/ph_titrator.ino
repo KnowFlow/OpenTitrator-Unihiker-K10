@@ -1305,6 +1305,7 @@ String runStatusText(RunStatusCode status) {
     case RunStatusCode::SampleFillTimeout: return "Sample timeout";
     case RunStatusCode::MassLimit: return "Mass limit";
     case RunStatusCode::TimeLimit: return "Time limit";
+    case RunStatusCode::EmergencyStopped: return "Emergency stop";
     case RunStatusCode::Inactive: return "Ready";
   }
   return "Ready";
@@ -1531,6 +1532,7 @@ void handleButton(ButtonEvent event) {
     if (event == ButtonEvent::ABLong) {
       pump.stop();
       samplePump.stop();
+      dispatchRunCommand(RunCommand::EmergencyStop);
     }
     return;
   }
@@ -1538,8 +1540,7 @@ void handleButton(ButtonEvent event) {
   if (event == ButtonEvent::ABLong) {
     pump.stop();
     samplePump.stop();
-    stopReason = TitrationStopReason::None;
-    setState(RunState::Done, "Emergency stop");
+    dispatchRunCommand(RunCommand::EmergencyStop);
     return;
   }
 
@@ -2138,6 +2139,7 @@ void handlePanic() {
   if (!requireCommand(WebCommand::EmergencyStop, sessionSlot)) return;
   pump.stop();
   samplePump.stop();
+  dispatchRunCommand(RunCommand::EmergencyStop);
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -2675,6 +2677,7 @@ void handleAction() {
 }
 
 void handleJson() {
+  RunTelemetry telemetry = runEngine.telemetry();
   String json = "{";
   json += "\"adc_ok\":" + String(lastPh.adcOk ? "true" : "false");
   json += ",\"ph_valid\":" + String(phReady ? "true" : "false");
@@ -2685,7 +2688,7 @@ void handleJson() {
   json += ",\"raw_bottle_g\":" + String(scaleReady ? lastScale.rawGrams : -1.0f, 1);
   json += ",\"used_g\":" + String(consumedGrams, 1);
   json += ",\"endpoint_used_g\":" + String(resultConsumedGrams(), 2);
-  json += ",\"predose_target_g\":0";
+  json += ",\"predose_target_g\":" + String(telemetry.predoseTargetGrams, 2);
   json += ",\"predose_ratio\":" + String(STOICH_PREDOSE_RATIO, 2);
   json += ",\"sample_g\":" + String(settings.sampleGrams, 1);
   json += ",\"sample_delivered_g\":" + String(sampleDeliveredGrams, 1);
@@ -2702,11 +2705,11 @@ void handleJson() {
   json += ",\"method\":\"" + String(methodValue(currentMethod)) + "\"";
   json += ",\"method_label\":\"" + jsonEscape(methodLabel(currentMethod)) + "\"";
   json += ",\"auto_eqp\":" + String(autoEqpEnabled() ? "true" : "false");
-  json += ",\"eqp_reached\":false";
-  json += ",\"eqp_points\":0";
-  json += ",\"eqp_used_g\":0";
-  json += ",\"eqp_signal\":0";
-  json += ",\"eqp_slope\":0";
+  json += ",\"eqp_reached\":" + String(telemetry.eqpReached ? "true" : "false");
+  json += ",\"eqp_points\":" + String(telemetry.eqpPointCount);
+  json += ",\"eqp_used_g\":" + String(telemetry.eqpUsedGrams, 2);
+  json += ",\"eqp_signal\":" + String(telemetry.eqpSignal, settings.endpoint == ControlEndpoint::Millivolts ? 0 : 2);
+  json += ",\"eqp_slope\":" + String(telemetry.eqpSlope, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
   json += ",\"endpoint\":\"" + String(endpointText()) + "\"";
   json += ",\"target_mv\":" + String(settings.targetMillivolts, 0);
   json += ",\"target_ph\":" + String(settings.targetPh, 2);

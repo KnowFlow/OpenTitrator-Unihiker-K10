@@ -120,8 +120,12 @@ RunOutput RunEngine::step(const RunInput &input) {
     stopReason_ = RunStopReason::SafetyLock;
   } else if (input.command == RunCommand::Reset) {
     reset();
-  } else if (input.command == RunCommand::StartNormal ||
-             input.command == RunCommand::StartExistingSample) {
+  } else if (input.command == RunCommand::EmergencyStop) {
+    phase_ = RunPhase::Done;
+    stopReason_ = RunStopReason::EmergencyStop;
+  } else if ((input.command == RunCommand::StartNormal ||
+              input.command == RunCommand::StartExistingSample) &&
+             phase_ == RunPhase::Inactive) {
     stopReason_ = RunStopReason::None;
     pausedPhase_ = RunPhase::Inactive;
     reStabilizingAfterResume_ = false;
@@ -402,9 +406,13 @@ RunOutput RunEngine::step(const RunInput &input) {
   } else if (phase_ == RunPhase::Paused) {
     output.status = RunStatusCode::Paused;
   } else if (phase_ == RunPhase::Done) {
-    output.status = stopReason_ == RunStopReason::EquivalencePoint
-                        ? RunStatusCode::EquivalencePointReached
-                        : RunStatusCode::TargetReached;
+    if (stopReason_ == RunStopReason::EquivalencePoint) {
+      output.status = RunStatusCode::EquivalencePointReached;
+    } else if (stopReason_ == RunStopReason::EmergencyStop) {
+      output.status = RunStatusCode::EmergencyStopped;
+    } else {
+      output.status = RunStatusCode::TargetReached;
+    }
   }
   return output;
 }
@@ -442,4 +450,15 @@ void RunEngine::resetExperimentHistory() {
 
 RunPhase RunEngine::phase() const {
   return phase_;
+}
+
+RunTelemetry RunEngine::telemetry() const {
+  RunTelemetry telemetry{};
+  telemetry.predoseTargetGrams = predoseTargetGrams_;
+  telemetry.eqpPointCount = eqpTracker_.count;
+  telemetry.eqpReached = eqpTracker_.reached;
+  telemetry.eqpUsedGrams = eqpTracker_.bestUsedGrams;
+  telemetry.eqpSignal = eqpTracker_.bestSignal;
+  telemetry.eqpSlope = eqpTracker_.bestSlope;
+  return telemetry;
 }

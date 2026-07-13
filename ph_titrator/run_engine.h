@@ -10,6 +10,7 @@ public:
   RunOutput step(const RunInput &input);
   void reset();
   RunPhase phase() const;
+  RunTelemetry telemetry() const;
 
 private:
   RunPhase phase_;

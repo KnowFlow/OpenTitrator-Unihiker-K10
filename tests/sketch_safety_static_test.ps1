@@ -10,7 +10,7 @@ function Assert-Match([string]$Pattern, [string]$Message) {
 }
 
 Assert-Match 'void handleSet\(\) \{\s*uint8_t sessionSlot;\s*if \(!requireCommand\(WebCommand::SaveMethodSettings, sessionSlot\)\)' 'authentication and admission reject /set before parsing fields'
-Assert-Match 'void handleButton\(ButtonEvent event\) \{[\s\S]*?if \(httpOtaSafetyLock\) \{\s*if \(event == ButtonEvent::ABLong\) \{\s*pump\.stop\(\);\s*samplePump\.stop\(\);\s*\}\s*return;' 'buttons preserve OTA state and lock while allowing emergency pump stop'
+Assert-Match 'void handleButton\(ButtonEvent event\) \{[\s\S]*?if \(httpOtaSafetyLock\) \{\s*if \(event == ButtonEvent::ABLong\) \{\s*pump\.stop\(\);\s*samplePump\.stop\(\);\s*dispatchRunCommand\(RunCommand::EmergencyStop\);\s*\}\s*return;' 'buttons preserve OTA state and lock while synchronizing an emergency stop'
 Assert-Match 'if \(cmd == "reset" && !httpOtaInProgress && !httpOtaSucceeded\)' 'Web reset clears only a terminal failed OTA lock'
 
 $PythonUploader = Get-Content (Join-Path $PSScriptRoot '..\scripts\ota_upload.py') -Raw
@@ -29,12 +29,16 @@ Assert-Match 'void applyRunOutput\(const RunOutput &output\)' 'adapter maps engi
 Assert-Match 'String runStatusText\(RunStatusCode status\)' 'adapter maps engine status text'
 Assert-Match 'ReStabilizingAfterResume[\s\S]*?正在重新稳定信号' 'resume re-stabilization has a user-facing status'
 Assert-Match 'void dispatchRunCommand\(RunCommand command\)' 'all active entry points use one command helper'
+Assert-Match 'dispatchRunCommand\(RunCommand::EmergencyStop\)' 'hardware and Web emergency stops synchronize the RunEngine'
 Assert-Match 'dispatchRunCommand\(RunCommand::StartNormal\)' 'normal starts use StartNormal'
 Assert-Match 'dispatchRunCommand\(RunCommand::StartExistingSample\)' 'existing sample starts use StartExistingSample'
 Assert-Match 'dispatchRunCommand\(RunCommand::Pause\)' 'pauses use Pause'
 Assert-Match 'dispatchRunCommand\(RunCommand::Resume\)' 'resumes use Resume'
 Assert-Match 'dispatchRunCommand\(RunCommand::Reset\)' 'resets use Reset'
 Assert-Match 'dispatchRunCommand\(RunCommand::Tick\)' 'main loop uses Tick'
+Assert-Match 'RunTelemetry telemetry = runEngine\.telemetry\(\);' 'JSON reads its diagnostics from the engine'
+Assert-Match 'String\(telemetry\.predoseTargetGrams, 2\)' 'JSON exposes engine-owned predose telemetry'
+Assert-Match 'String\(telemetry\.eqpPointCount\)' 'JSON exposes engine-owned EQP telemetry'
 
 foreach ($legacy in @(
   'TitrationDynamics\s+phDynamics',
