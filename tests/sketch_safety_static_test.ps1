@@ -48,14 +48,17 @@ Assert-Match 'function newRunRecord\(\)' 'record initializer exists'
 Assert-Match 'function observeRunRecord\(d\)' 'record observer exists'
 Assert-Match 'function renderRunRecord\(\)' 'record renderer exists'
 Assert-Match 'runRecord\.confirmed=completed' 'aborted records remain unconfirmed'
-Assert-Match 'runRecord\.points=d\.adc_ok&&curve\.length\?\[recordCopy\(curve\[curve\.length-1\]\)\]:\[\]' 'first active telemetry starts empty or with only its current curve point'
-Assert-Match 'else if\(runRecord&&runRecord\.startedAt&&!runRecord\.final&&d\.adc_ok&&curve\.length\)\{runRecord\.points\.push\(recordCopy\(curve\[curve\.length-1\]\)\)\}' 'later telemetry appends only while the record is not finalized'
+Assert-Match 'function recordPoint\(\)\{var p=recordCopy\(curve\[curve\.length-1\]\);p\.elapsed_s=runRecord\.points\.length\?\(new Date\(p\.ts\)-new Date\(runRecord\.startedAt\)\)/1000:0;return p\}' 'record points use a record-start-relative elapsed timeline with a zero first point'
+Assert-Match 'runRecord\.points=d\.adc_ok&&curve\.length\?\[recordPoint\(\)\]:\[\]' 'first active telemetry starts empty or with its normalized current curve point'
+Assert-Match 'else if\(runRecord&&runRecord\.startedAt&&!runRecord\.final&&d\.adc_ok&&curve\.length\)\{runRecord\.points\.push\(recordPoint\(\)\)\}' 'later telemetry appends normalized copies only while the record is not finalized'
+Assert-Match 'function recordDeviceSnapshot\(d\)\{return\{network:d\.network,ip:d\.ip,ap_ip:d\.ap_ip,sta_ip:d\.sta_ip,sta_connected:d\.sta_connected,ota:d\.ota,ota_safety_lock:d\.ota_safety_lock,status:d\.status,' 'device snapshots retain firmware-independent network and status facts'
 $recordControl = [regex]::Match($sketch, 'var runRecord=null;[\s\S]*?(?=page \+= F\("async function poll)').Value
 if (-not $recordControl) { throw 'FAIL: could not inspect browser record control path' }
 if ($recordControl -match '/action|/set|/ota|apiPost') { throw 'FAIL: record control path must not control device' }
 Assert-Match 'recordCurve\(d\);[\s\S]*?observeRunRecord\(d\);' 'record observer runs after curve recorder'
 Assert-Match 'function exportRunRecord\(\)' 'record JSON exporter exists'
 Assert-Match 'function printRunReport\(\)' 'print report function exists'
+Assert-Match "JSON\.stringify\(runRecord\.deviceSnapshot\|\|\{\},null,2\)" 'print report includes every device snapshot field'
 Assert-Match 'ABORTED / NOT CONFIRMED' 'aborted reports are visibly marked'
 Assert-Match 'confirmed' 'report stores confirmation state'
 
