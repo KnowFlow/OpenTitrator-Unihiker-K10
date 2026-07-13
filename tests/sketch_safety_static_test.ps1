@@ -54,6 +54,10 @@ $recordControl = [regex]::Match($sketch, 'var runRecord=null;[\s\S]*?(?=page \+=
 if (-not $recordControl) { throw 'FAIL: could not inspect browser record control path' }
 if ($recordControl -match '/action|/set|/ota|apiPost') { throw 'FAIL: record control path must not control device' }
 Assert-Match 'recordCurve\(d\);[\s\S]*?observeRunRecord\(d\);' 'record observer runs after curve recorder'
+Assert-Match 'function exportRunRecord\(\)' 'record JSON exporter exists'
+Assert-Match 'function printRunReport\(\)' 'print report function exists'
+Assert-Match 'ABORTED / NOT CONFIRMED' 'aborted reports are visibly marked'
+Assert-Match 'confirmed' 'report stores confirmation state'
 
 foreach ($legacy in @(
   'TitrationDynamics\s+phDynamics',
