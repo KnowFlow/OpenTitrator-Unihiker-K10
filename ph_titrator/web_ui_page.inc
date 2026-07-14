@@ -3,7 +3,7 @@
   int usedPercent = (int)constrain((consumedGrams / settings.maxConsumedGrams) * 100.0f, 0.0f, 100.0f);
   appendWebUiDocumentOpen(page);
 
-  page += F("<div class='top'><div><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>Potentiometric Titrator</div></div><div class='row'><label class='mini' for='languageSelect'>Language<select id='languageSelect'><option value='en'>English</option><option value='zh'>中文</option></select></label><div id='network' class='pill'>");
+  page += F("<div class='top'><div><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>Potentiometric Titrator</div></div><div class='row topTools'><label class='mini language' for='languageSelect'>Language<select id='languageSelect'><option value='en'>English</option><option value='zh'>中文</option></select></label><div id='network' class='pill'>");
   page += F("<span>");
   page += htmlEscape(networkLabel);
   page += F("</span><span>AP ");
