@@ -9,3 +9,15 @@ String htmlEscape(const String &value) {
   out.replace("'", "&#39;");
   return out;
 }
+
+String jsonEscape(const String &value) {
+  String out = value;
+  out.replace("\\", "\\\\");
+  out.replace("\"", "\\\"");
+  out.replace("\b", "\\b");
+  out.replace("\f", "\\f");
+  out.replace("\n", "\\n");
+  out.replace("\r", "\\r");
+  out.replace("\t", "\\t");
+  return out;
+}

@@ -1702,18 +1702,6 @@ void runController() {
   dispatchRunCommand(RunCommand::Tick);
 }
 
-String jsonEscape(const String &value) {
-  String out = value;
-  out.replace("\\", "\\\\");
-  out.replace("\"", "\\\"");
-  out.replace("\b", "\\b");
-  out.replace("\f", "\\f");
-  out.replace("\n", "\\n");
-  out.replace("\r", "\\r");
-  out.replace("\t", "\\t");
-  return out;
-}
-
 void loadWifiSettings() {
   preferences.begin("network", true);
   wifiSsid = preferences.getString("ssid", "");
