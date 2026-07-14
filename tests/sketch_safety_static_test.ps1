@@ -1,8 +1,9 @@
 $ErrorActionPreference = 'Stop'
 
 $sketchPath = Join-Path $PSScriptRoot '..\ph_titrator\ph_titrator.ino'
-$sketch = (Get-Content -Raw $sketchPath) +
-          (Get-Content -Raw (Join-Path $PSScriptRoot '..\ph_titrator\web_ui_page.inc'))
+$page = Get-Content -Raw (Join-Path $PSScriptRoot '..\ph_titrator\web_ui_page.inc')
+$script = Get-Content -Raw (Join-Path $PSScriptRoot '..\ph_titrator\web_ui_script.inc')
+$sketch = (Get-Content -Raw $sketchPath) + $page.Replace('#include "web_ui_script.inc"', $script)
 
 function Assert-Match([string]$Pattern, [string]$Message) {
   if ($sketch -notmatch $Pattern) {

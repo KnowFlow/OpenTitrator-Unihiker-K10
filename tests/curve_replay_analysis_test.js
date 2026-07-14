@@ -2,8 +2,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
+const page = fs.readFileSync('ph_titrator/web_ui_page.inc', 'utf8');
+const script = fs.readFileSync('ph_titrator/web_ui_script.inc', 'utf8');
 const sketch = fs.readFileSync('ph_titrator/ph_titrator.ino', 'utf8') +
-  fs.readFileSync('ph_titrator/web_ui_page.inc', 'utf8');
+  page.replace('#include "web_ui_script.inc"', script);
 const match = sketch.match(/function analyzeReplay\(points\)([\s\S]*?)function replayText/);
 assert.ok(match, 'embedded replay analyzer must be present');
 
