@@ -13,6 +13,7 @@
 #include "auth_core.h"
 #include "auth_crypto_esp32.h"
 #include "auth_store.h"
+#include "web_ui_escape.h"
 #include "command_admission.h"
 #include "run_engine.h"
 
@@ -1699,16 +1700,6 @@ void sampleSensors() {
 
 void runController() {
   dispatchRunCommand(RunCommand::Tick);
-}
-
-String htmlEscape(const String &value) {
-  String out = value;
-  out.replace("&", "&amp;");
-  out.replace("<", "&lt;");
-  out.replace(">", "&gt;");
-  out.replace("\"", "&quot;");
-  out.replace("'", "&#39;");
-  return out;
 }
 
 String jsonEscape(const String &value) {
