@@ -256,6 +256,14 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 
 在浏览器中打开控制器 IP 地址。
 
+| 运行 | 校准 | 手动 |
+|-----|------|------|
+| ![中文运行页面](screenshots/web-run-zh.png) | ![中文校准页面](screenshots/web-cal-zh.png) | ![中文手动页面](screenshots/web-manual-zh.png) |
+
+| 管理 | 说明 |
+|------|------|
+| ![中文管理页面](screenshots/web-admin-zh.png) | ![中文说明页面](screenshots/web-guide-zh.png) |
+
 未登录时仍可只读监控和执行 **Emergency stop（紧急停止）**。开始、暂停、复位、校准、手动运行泵、保存设置或上传固件前必须登录。若 30 分钟内没有成功的认证写操作，会话会过期；命令返回 `Unauthorized` 时请重新登录。
 
 ### 实时面板

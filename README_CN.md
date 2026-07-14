@@ -47,13 +47,13 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           电子秤 (0x64)
 
 ### 网页截图
 
-| Run | Calibration | Manual |
+| 运行 | 校准 | 手动 |
 |-----|-------------|--------|
-| ![Run tab](docs/screenshots/web-run.png) | ![Calibration tab](docs/screenshots/web-cal.png) | ![Manual tab](docs/screenshots/web-manual.png) |
+| ![中文运行页面](docs/screenshots/web-run-zh.png) | ![中文校准页面](docs/screenshots/web-cal-zh.png) | ![中文手动页面](docs/screenshots/web-manual-zh.png) |
 
-| Admin | Guide |
+| 管理 | 说明 |
 |-------|-------|
-| ![Admin tab](docs/screenshots/web-admin.png) | ![Guide tab](docs/screenshots/web-guide.png) |
+| ![中文管理页面](docs/screenshots/web-admin-zh.png) | ![中文说明页面](docs/screenshots/web-guide-zh.png) |
 
 ### 自适应纯脉冲滴定策略
 控制器不再使用连续 PWM，而是根据当前 pH 与目标值的距离，自动选择**脉冲时长**和**静置等待时间**：

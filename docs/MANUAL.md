@@ -256,6 +256,14 @@ The titration stops automatically when any of the following occurs:
 
 Open the controller IP in a browser.
 
+| Run | Calibration | Manual |
+|-----|-------------|--------|
+| ![Run tab in English](screenshots/web-run-en.png) | ![Calibration tab in English](screenshots/web-cal-en.png) | ![Manual tab in English](screenshots/web-manual-en.png) |
+
+| Admin | Guide |
+|-------|-------|
+| ![Admin tab in English](screenshots/web-admin-en.png) | ![Guide tab in English](screenshots/web-guide-en.png) |
+
 Read-only monitoring and **Emergency stop** remain available without signing in. Sign in before starting, pausing, resetting, calibrating, manually running pumps, saving settings, or uploading firmware. Sessions expire after 30 minutes without a successful authenticated write; sign in again if a command returns `Unauthorized`.
 
 ### Live Panel

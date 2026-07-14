@@ -50,11 +50,11 @@ Remaining validation is primarily physical: tune EDTA automatic-EQP thresholds a
 
 | Run | Calibration | Manual |
 |-----|-------------|--------|
-| ![Run tab](docs/screenshots/web-run.png) | ![Calibration tab](docs/screenshots/web-cal.png) | ![Manual tab](docs/screenshots/web-manual.png) |
+| ![Run tab in English](docs/screenshots/web-run-en.png) | ![Calibration tab in English](docs/screenshots/web-cal-en.png) | ![Manual tab in English](docs/screenshots/web-manual-en.png) |
 
 | Admin | Guide |
 |-------|-------|
-| ![Admin tab](docs/screenshots/web-admin.png) | ![Guide tab](docs/screenshots/web-guide.png) |
+| ![Admin tab in English](docs/screenshots/web-admin-en.png) | ![Guide tab in English](docs/screenshots/web-guide-en.png) |
 
 ### Adaptive Pure-Pulse Titration
 Instead of continuous PWM, the controller doses the titrant in **timed pulses** whose length and settle time adapt to how far the current pH is from the target:
