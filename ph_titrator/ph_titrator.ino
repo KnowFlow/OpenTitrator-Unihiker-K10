@@ -1733,6 +1733,10 @@ void handleRoot() {
   server.send(200, "text/html", htmlPage());
 }
 
+void handleChineseUiScript() {
+  sendChineseUiScript();
+}
+
 void sendApiError(int status, const char *code, const String &message) {
   server.send(status, "application/json", String("{\"ok\":false,\"error\":\"") +
       jsonEscape(code) + "\",\"message\":\"" + jsonEscape(message) + "\"}");
@@ -2542,6 +2546,7 @@ void startNetwork() {
   }
 
   server.on("/", handleRoot);
+  server.on("/i18n-zh.js", handleChineseUiScript);
   server.on("/set", HTTP_POST, handleSet);
   server.on("/set", HTTP_GET, handleMethodNotAllowed);
   server.on("/action", HTTP_POST, handleAction);

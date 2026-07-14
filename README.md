@@ -34,6 +34,17 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           Scale (0x64)
 
 ## Software Highlights
 
+### Latest update report — 2026-07-14
+
+- The monolithic titration sketch was split into testable run-engine, web-shell, page, escaping, and browser-script modules.
+- HTTP write operations use `POST`, authenticated sessions, command/state permissions, rate limiting, and a USB administrator-recovery path.
+- Pump timing overflow protection, watchdog/safety-stop paths, endpoint hold behavior, calibration validity checks, and EQP/curve-replay coverage were added.
+- Browser-side run records support final-record persistence (IndexedDB), replay analysis, printable reports, and CSV/JSON export; records never write back to the device automatically.
+- The web UI now has an English/Chinese selector. Chinese text is loaded through a separate `/i18n-zh.js` resource so the primary controller page stays within the K10's safe HTML-memory budget.
+- The current firmware was compiled and installed through authenticated HTTP OTA. Static authentication/safety tests and browser curve/record tests passed before deployment.
+
+Known follow-up: Chinese coverage is being completed for every explanatory paragraph and runtime-composed status message outside the Run tab. The controller remains usable while this wording work continues.
+
 ### Web Screenshots
 
 | Run | Calibration | Manual |

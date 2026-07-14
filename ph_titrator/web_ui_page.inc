@@ -1,5 +1,5 @@
   String page;
-  page.reserve(20000);
+  page.reserve(68000);
   int usedPercent = (int)constrain((consumedGrams / settings.maxConsumedGrams) * 100.0f, 0.0f, 100.0f);
   appendWebUiDocumentOpen(page);
 
