@@ -65,6 +65,8 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           电子秤 (0x64)
 ### 蠕动泵自动校准
 在 **SetupReady（就绪）** 状态按 **B 键**进入校准。控制器依次让滴定泵和样品泵各运行 2 秒，每个泵停泵后静置 5 秒再读取重量差，计算流量（g/s）并保存到 ESP32 Preferences，掉电不丢失。
 
+每个泵的速度可以用舵机 PWM 脉宽单独设置。默认 `1000us` 保持原有速度；越接近 `1500us` 越慢。修改 PWM 速度后应重新校准泵流量，确保 g/s 估算匹配实际出液。
+
 ### 校准页面
 网页 **Calibration** tab 将校准分为泵流量、电子秤、pH/mV 传感器和滴定液标准四类。pH/mV 区域显示两点校准斜率百分比、pH 7 偏移和状态；**Reset pH/mV filter** 只重启采样滤波，不会改写已保存的两点校准。滴定液浓度、空白量和结果公式仍在 **Admin** tab 设置。
 
@@ -117,6 +119,8 @@ arduino-cli upload -p COM4 --fqbn UNIHIKER:esp32:k10 ./ph_titrator
 python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
 ```
 
+HTTP OTA 在写入固件前会停止并锁定两路泵。更新成功后设备重启进入 SetupMode，不会恢复中断的实验；上传失败或中止后，请使用网页 Reset 复位，无需依赖 A/B 实体按键。
+
 ### 4. 连接
 
 连接 `K10-pH-Titrator` WiFi，打开 K10 屏幕上显示的 AP IP（通常为 `http://192.168.4.1/`），或 STA IP（若已配置）。
@@ -168,6 +172,16 @@ scripts/
 ```
 
 ---
+
+## 网页认证与生产配置
+
+首次设置时，用设备标签上的唯一出厂密码登录并设置管理员密码。标签应保密，仅用于网页密码恢复；恢复会停止两台泵、清除所有会话并返回 `SetupMode`。共用电脑使用后请退出。若 30 分钟内没有成功的认证写操作，会话自动失效。
+
+控制和设置接口现在仅接受带认证的 `POST`；旧版 `GET` 集成不兼容。OTA 同样需要当前会话令牌：`python scripts/ota_upload.py firmware.bin --ip DEVICE_IP --token SESSION_TOKEN` 或 `.\scripts\ota_upload.ps1 -Bin firmware.bin -Ip DEVICE_IP -Token SESSION_TOKEN`。脚本通过 `X-Session-Token` 请求头发送令牌且不会打印令牌。
+
+生产时必须为每台设备单独运行 `generate_factory_auth.py`，只把对应生成头文件编译进该设备，贴上匹配标签，构建后删除两个生成文件。不得复用或提交凭据和标签。
+
+HTTP 认证在本地网络中仍是明文，无法防御网络抓包。请使用设备自身 AP 或可信局域网。
 
 ## 许可证
 

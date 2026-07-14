@@ -34,6 +34,17 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           Scale (0x64)
 
 ## Software Highlights
 
+### Latest update report — 2026-07-14
+
+- The monolithic titration sketch was split into testable run-engine, web-shell, page, escaping, and browser-script modules.
+- HTTP write operations use `POST`, authenticated sessions, command/state permissions, rate limiting, and a USB administrator-recovery path.
+- Pump timing overflow protection, watchdog/safety-stop paths, endpoint hold behavior, calibration validity checks, and EQP/curve-replay coverage were added.
+- Browser-side run records support final-record persistence (IndexedDB), replay analysis, printable reports, and CSV/JSON export; records never write back to the device automatically.
+- The web UI now has an English/Chinese selector. Chinese text is loaded through a separate `/i18n-zh.js` resource so the primary controller page stays within the K10's safe HTML-memory budget.
+- The current firmware was compiled and installed through authenticated HTTP OTA. Static authentication/safety tests and browser curve/record tests passed before deployment.
+
+Known follow-up: Chinese coverage is being completed for every explanatory paragraph and runtime-composed status message outside the Run tab. The controller remains usable while this wording work continues.
+
 ### Web Screenshots
 
 | Run | Calibration | Manual |
@@ -64,6 +75,8 @@ A `TitrationDynamics` tracker watches `dpH/dt` and halts immediately if the curv
 
 ### Automatic Pump Calibration
 From **SetupReady**, press **B** to enter calibration. The controller runs each pump for exactly 2 seconds, waits 5 seconds after each pump stops, measures the weight change on the scale, computes the flow rate (g/s), and saves it to ESP32 Preferences.
+
+Pump speed is configurable per pump as a servo PWM pulse width. The default `1000us` preserves the original speed; values closer to `1500us` run slower. Recalibrate pump g/s after changing PWM speed so dosing estimates match the actual flow.
 
 ### Calibration Page
 The web **Calibration** tab separates pump flow, scale, pH/mV sensor, and titrant standard settings. The pH/mV section displays two-point slope percentage, pH 7 offset, and calibration status. **Reset pH/mV filter** only restarts acquisition filtering; it does not overwrite the saved two-point calibration. Titrant molarity, blank, and result formula remain in the **Admin** tab.
@@ -119,6 +132,8 @@ arduino-cli upload -p COM4 --fqbn UNIHIKER:esp32:k10 ./ph_titrator
 python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
 ```
 
+HTTP OTA stops and locks both pumps before flash writing. A successful update restarts into SetupMode and never resumes the interrupted run. After a failed or aborted upload, use the Web Reset control; hardware A/B buttons are not required for recovery.
+
 ### 4. Connect
 
 Join the `K10-pH-Titrator` WiFi, open the AP IP shown on the K10 screen (usually `http://192.168.4.1/`), or use the STA IP if configured.
@@ -145,9 +160,34 @@ Join the `K10-pH-Titrator` WiFi, open the AP IP shown on the K10 screen (usually
 |----------|--------|-------------|
 | `/` | GET | Main dashboard |
 | `/json` | GET | Live status JSON |
-| `/set` | GET | Save settings (`mode`, `target`, `max`, `sample`, `titrant`, `titrant_m`, `blank_g`, `titrant_density`, `sample_density`, `ssid`, `wifi_password`) |
-| `/action?cmd=` | GET | `start`, `stop`, `panic`, `tare`, `reset` |
+| `/set` | POST | Save settings (`mode`, `target`, `max`, `sample`, `titrant`, `titrant_m`, `blank_g`, `titrant_density`, `sample_density`, `ssid`, `wifi_password`) |
+| `/action` | POST | Authenticated commands in the request body: `start`, `start_existing`, `stop`, `tare`, `reset` |
+| `/panic` | POST | Anonymous emergency stop; immediately stops both pumps |
 | `/ota` | POST | Firmware binary upload |
+
+---
+
+## RunEngine lifecycle boundary
+
+`RunEngine` owns the active experiment lifecycle and its history: phase; filling/progress; run, pulse, and settle timers; dosing dynamics; endpoint hold; equivalence-point (EQP) tracking; predose progress; active mass/result selection; and emergency stop. It is a pure C++17 boundary with fixed memory budgets: `sizeof(RunEngine) <= 4096` and `sizeof(RunInput) + sizeof(RunOutput) <= 1024`.
+
+`control_logic.h` provides pure calculations and reusable value types; it does not own live experiment state. The sketch owns hardware and sensors, Web/authentication, OTA, display, setup/calibration, persistence, and only translates inputs into `RunInput` and `RunOutput` intentions back to hardware/UI.
+
+Every active-run entry point uses the same command mapping:
+
+| Source | `RunCommand` |
+|--------|--------------|
+| Web/panel Start | `StartNormal` |
+| Start existing sample | `StartExistingSample` |
+| Stop/pause | `Pause` |
+| Paused Start/resume | `Resume` |
+| Reset | `Reset` |
+| Main loop | `Tick` |
+| AB-long and Web panic | `EmergencyStop` |
+
+Resume always re-enters `FilterWarmup`; the display tells the operator `正在重新稳定信号` while the signal is re-stabilized. `requestedSettleMs` is display/diagnostic metadata only. It cannot advance lifecycle transitions; only engine time and input sensor facts can do that.
+
+On-device deployment is deferred. The labelled-device Task 7 in [the Web/auth command-security plan](docs/superpowers/plans/2026-07-10-web-auth-command-security.md) must be completed onsite by the onsite operator before device installation or smoke verification. This phase does not claim deployment.
 
 ---
 
@@ -170,6 +210,16 @@ scripts/
 ```
 
 ---
+
+## Web authentication and provisioning
+
+On first setup, sign in with the unique factory password printed on the device label and choose the administrator password. Keep the label private for Web-only password recovery; recovery stops both pumps, clears active sessions, and returns the instrument to `SetupMode`. Log out on shared computers. Sessions expire after 30 minutes without a successful authenticated write.
+
+All control and settings integrations now use authenticated `POST` requests; legacy `GET` integrations are incompatible. OTA also requires a current session token: `python scripts/ota_upload.py firmware.bin --ip DEVICE_IP --token SESSION_TOKEN` or `.\scripts\ota_upload.ps1 -Bin firmware.bin -Ip DEVICE_IP -Token SESSION_TOKEN`. The helpers send the token in `X-Session-Token` and do not print it.
+
+Manufacturing must run `generate_factory_auth.py` once per device, compile its generated header into that device only, attach the matching label, and delete both generated artifacts after the build. Never reuse or commit credentials or labels.
+
+HTTP authentication remains plaintext on the local network and does not protect against a packet sniffer. Use the device AP or a trusted LAN.
 
 ## License
 

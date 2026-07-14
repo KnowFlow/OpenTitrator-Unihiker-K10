@@ -21,6 +21,7 @@
 9. [OTA Firmware Updates](#9-ota-firmware-updates)
 10. [Troubleshooting](#10-troubleshooting)
 11. [Technical Details](#11-technical-details)
+12. [Authentication and Provisioning](#12-authentication-and-provisioning)
 
 ---
 
@@ -288,10 +289,14 @@ Open the controller IP in a browser.
 ### Calibration Tab
 - **Enter ready**: stops both pumps and enters the READY state for calibration.
 - **Calibrate pumps**: measures both pump flow rates in the sequence "titrant pump 2 s -> wait 5 s -> sample pump 2 s -> wait 5 s".
+- **Pump PWM us**: saved speed for each pump. `1000us` is the original fast setting; values closer to `1500us` slow the pump toward the stop midpoint. After changing this value, run pump calibration again.
 - **Tare scale**: uses the current reactor weight as the scale baseline.
 - **Reset pH/mV filter**: restarts pH/mV acquisition filtering after changing probe or buffer solution. It does not overwrite the saved two-point calibration.
 - **pH/mV Sensor**: enter two buffer pH values with their probe mV and ADS input mV. The page displays slope percentage, pH 7 offset, and calibration status to help decide whether the probe needs recalibration.
 - **Titrant Standard**: shows the current titrant and result formula. Titrant molarity, blank, and formula are configured in the **Admin** tab; a future standardization step can calculate titrant factor from a primary standard.
+
+### Manual Tab
+- Manual pump runs can use temporary P0/P1 PWM values for speed testing. These temporary values do not change the saved defaults; save PWM values in Calibration when the tested speed is suitable.
 
 ### Settings
 - **Method**: pH endpoint, mV endpoint, EDTA hardness, or Manual method. Changing a preset immediately fills the related form values.
@@ -301,6 +306,8 @@ Open the controller IP in a browser.
 - **Control band**: slows dosing as the signal approaches the endpoint.
 - **Stable delta/s**: slope threshold used to decide whether the signal has settled.
 - **Hold s**: confirmation time after the endpoint is reached.
+
+Endpoint hold uses fresh sensor readings. Entering the endpoint range stops dosing and starts the Hold timer. If any fresh reading leaves the range, the timer resets and dosing evaluation resumes. The run finishes only after the signal remains in range for the complete Hold period.
 - **Min / Max settle s**: minimum and maximum wait after each dose.
 - **Max time s**: maximum titration time protection.
 - **Max used g**: safety limit.
@@ -332,6 +339,8 @@ python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.
 ```
 
 The device restarts automatically when the upload completes.
+
+HTTP OTA stops and locks both pumps before flash writing. A successful update restarts into SetupMode and never resumes the interrupted run. After a failed or aborted upload, use the Web Reset control; hardware A/B buttons are not required for recovery.
 
 ### Method B: Arduino OTA (IDE)
 
@@ -405,6 +414,18 @@ Saved to Preferences namespace `cal`, keys `titrant_gps` and `sample_gps`.
 ### 11.5 Partition Table
 
 The project uses a custom 16 MB partition table (`partitions.csv`) with dual OTA app partitions (~6.5 MB each) to support large firmware updates.
+
+## 12. Authentication and provisioning
+
+### Login and recovery
+
+The first administrator signs in with the device-specific factory password on the private label and sets an administrator password. Logout invalidates the current session; otherwise it expires after 30 minutes without a successful authenticated write. Forgotten passwords can only be recovered in the Web interface using the factory label. Recovery stops both pumps, clears sessions and run data, and enters `SetupMode`.
+
+Control, settings, recovery, logout, and OTA are authenticated POST-only operations, so legacy GET-based integrations must migrate. Supply the logged-in session token to OTA with `--token` (Python) or `-Token` (PowerShell); it is sent as `X-Session-Token` and must never be logged.
+
+### Manufacturing and network security
+
+For manufacturing, generate a unique header/label pair per serial number, compile that header into only its matching unit, apply and protect the label, then securely delete the generated files. HTTP remains local-network plaintext and cannot defeat packet sniffing; operate through the device AP or a trusted LAN.
 
 ---
 

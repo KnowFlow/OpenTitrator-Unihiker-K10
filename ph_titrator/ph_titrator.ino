@@ -1,3 +1,5 @@
+#if !defined(AUTH_USB_RECOVERY)
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
@@ -8,17 +10,34 @@
 #include <ESP32Servo.h>
 #include "unihiker_k10.h"
 #include "control_logic.h"
+#include "auth_core.h"
+#include "auth_crypto_esp32.h"
+#include "auth_store.h"
+#include "web_ui_escape.h"
+#include "command_admission.h"
+#include "run_engine.h"
+
+struct SettingsCandidate;
+class PumpController;
 
 UNIHIKER_K10 k10;
 Servo titrantPumpServo;
 Servo samplePumpServo;
 WebServer server(80);
 Preferences preferences;
+Esp32AuthCrypto authCrypto;
+AuthStore authStore;
+AuthManager authManager(authCrypto);
+bool authStorageReady = false;
+bool otaUploadStartSeen = false;
+bool otaRequestAccepted = false;
+uint8_t otaSessionSlot = 0;
+int otaRejectedStatus = 0;
 
 const uint8_t SCREEN_DIR = 2;
 const uint8_t ADS1115_ADDR = 0x49;
 const uint8_t SCALE_ADDR = 0x64;
-const uint8_t PH_ADC_CHANNEL = 0;
+const uint8_t PH_ADC_CHANNEL = 1;
 const float DEFAULT_TEMPERATURE_C = 25.0f;
 const uint32_t ADC_CONVERSION_MS = 12;
 const uint32_t SCALE_SETTLE_MS = 60;
@@ -31,8 +50,19 @@ const uint32_t RESTART_DELAY_MS = 1200;
 const int TITRANT_PUMP_PIN = P0;
 const int SAMPLE_PUMP_PIN = P1;
 const int PUMP_STOP_US = 1500;
-const int TITRANT_PUMP_RUN_US = 1000;
-const int SAMPLE_PUMP_RUN_US = 1000;
+const int PUMP_MIN_RUN_US = 1000;
+const int PUMP_MAX_RUN_US = 1500;
+const int TITRANT_PUMP_DEFAULT_RUN_US = 1000;
+const int SAMPLE_PUMP_DEFAULT_RUN_US = 1000;
+const int TITRANT_DOSE_MIN_PERCENT = 5;
+const int TITRANT_DOSE_MAX_PERCENT = 100;
+const int TITRANT_DOSE_DEFAULT_PERCENT = 100;
+const uint16_t TITRANT_MIN_PULSE_MS = 5;
+const uint16_t TITRANT_BURST_ON_DEFAULT_MS = 5;
+const uint16_t TITRANT_BURST_OFF_DEFAULT_MS = 100;
+const uint16_t TITRANT_BURST_ON_MIN_MS = 1;
+const uint16_t TITRANT_BURST_ON_MAX_MS = 1000;
+const uint16_t TITRANT_BURST_OFF_MAX_MS = 5000;
 const uint32_t SAMPLE_INTERVAL_MS = 2000;
 const uint32_t SCALE_SAMPLE_FILL_INTERVAL_MS = 250;
 const uint32_t SCALE_SAMPLE_INTERVAL_MS = 500;
@@ -484,50 +514,146 @@ private:
   }
 };
 
+int constrainPumpRunUs(int value) {
+  return constrain(value, PUMP_MIN_RUN_US, PUMP_MAX_RUN_US);
+}
+
+int constrainTitrantDosePercent(int value) {
+  return constrain(value, TITRANT_DOSE_MIN_PERCENT, TITRANT_DOSE_MAX_PERCENT);
+}
+
+uint16_t constrainTitrantBurstOnMs(int value) {
+  return (uint16_t)constrain(value, TITRANT_BURST_ON_MIN_MS, TITRANT_BURST_ON_MAX_MS);
+}
+
+uint16_t constrainTitrantBurstOffMs(int value) {
+  return (uint16_t)constrain(value, 0, TITRANT_BURST_OFF_MAX_MS);
+}
+
+uint16_t scaleTitrantPulseMs(uint16_t pulseMs, int percent) {
+  if (pulseMs == 0) {
+    return 0;
+  }
+  uint32_t scaled = ((uint32_t)pulseMs * (uint32_t)constrainTitrantDosePercent(percent) + 50UL) / 100UL;
+  if (scaled < TITRANT_MIN_PULSE_MS) {
+    scaled = TITRANT_MIN_PULSE_MS;
+  }
+  if (scaled > UINT16_MAX) {
+    scaled = UINT16_MAX;
+  }
+  return (uint16_t)scaled;
+}
+
 class PumpController {
 public:
   void begin(Servo &servoRef, int pin, int runPulseUs) {
     servo = &servoRef;
-    runUs = runPulseUs;
     servo->setPeriodHertz(50);
     servo->attach(pin, 500, 2500);
+    setRunPulseUs(runPulseUs);
     stop();
+  }
+
+  void setRunPulseUs(int pulseUs) {
+    runUs = constrainPumpRunUs(pulseUs);
+  }
+
+  int runPulseUs() const {
+    return runUs;
   }
 
   void stop() {
     runUntilMs = 0;
+    burstMode = false;
+    outputRunning = false;
     writeStop();
   }
 
   void runForMs(uint16_t ms) {
+    burstMode = false;
     runUntilMs = millis() + ms;
     writeRun();
   }
 
   void runForMsAtUs(uint16_t ms, int pulseUs) {
+    burstMode = false;
     runUntilMs = millis() + ms;
-    writeRun(pulseUs);
+    writeRun(constrainPumpRunUs(pulseUs));
+  }
+
+  void runForMsAtUsBurst(uint16_t ms, int pulseUs, uint16_t onMs, uint16_t offMs) {
+    uint32_t now = millis();
+    runUntilMs = now + ms;
+    burstCycleStartedMs = now;
+    burstOnMs = onMs;
+    burstOffMs = offMs;
+    burstRunUs = constrainPumpRunUs(pulseUs);
+    burstMode = offMs > 0;
+    outputRunning = false;
+    updateBurstOutput();
   }
 
   void runContinuous() {
+    burstMode = false;
     runUntilMs = millis() + 30000; // 30s max safety
     writeRun();
   }
 
+  void runContinuousAtUs(int pulseUs) {
+    burstMode = false;
+    runUntilMs = millis() + 30000; // 30s max safety
+    writeRun(constrainPumpRunUs(pulseUs));
+  }
+
   void update() {
-    if (runUntilMs > 0 && millis() >= runUntilMs) {
+    uint32_t now = millis();
+    if (deadlineReached(now, runUntilMs)) {
       stop();
+      return;
+    }
+    if (burstMode && isRunning()) {
+      updateBurstOutput();
     }
   }
 
   bool isRunning() const {
-    return runUntilMs > 0 && millis() < runUntilMs;
+    uint32_t now = millis();
+    return runUntilMs != 0U && !deadlineReached(now, runUntilMs);
   }
 
 private:
   Servo *servo = nullptr;
   uint32_t runUntilMs = 0;
+  uint32_t burstCycleStartedMs = 0;
   int runUs = PUMP_STOP_US;
+  int burstRunUs = PUMP_STOP_US;
+  uint16_t burstOnMs = 0;
+  uint16_t burstOffMs = 0;
+  bool burstMode = false;
+  bool outputRunning = false;
+
+  void updateBurstOutput() {
+    if (!burstMode || burstOffMs == 0) {
+      writeRun(burstRunUs);
+      outputRunning = true;
+      return;
+    }
+    uint32_t cycleMs = (uint32_t)burstOnMs + (uint32_t)burstOffMs;
+    if (cycleMs == 0) {
+      writeStop();
+      outputRunning = false;
+      return;
+    }
+    uint32_t elapsed = (millis() - burstCycleStartedMs) % cycleMs;
+    bool shouldRun = elapsed < burstOnMs;
+    if (shouldRun && !outputRunning) {
+      writeRun(burstRunUs);
+      outputRunning = true;
+    } else if (!shouldRun && outputRunning) {
+      writeStop();
+      outputRunning = false;
+    }
+  }
 
   void writeStop() {
     if (servo != nullptr) {
@@ -541,7 +667,7 @@ private:
 
   void writeRun(int pulseUs) {
     if (servo != nullptr) {
-      servo->writeMicroseconds(pulseUs);
+      servo->writeMicroseconds(constrainPumpRunUs(pulseUs));
     }
   }
 };
@@ -555,31 +681,35 @@ PumpController samplePump;
 TitrationSettings settings;
 TitrationMethod currentMethod = TitrationMethod::PhEndpoint;
 RunState state = RunState::SetupMode;
-RunState pausedFromState = RunState::Running;
 TitrationStopReason stopReason = TitrationStopReason::None;
 
 PhReading lastPh;
 ScaleReading lastScale;
 PhFilter phFilter;
-TitrationDynamics phDynamics;
-EqpTracker eqpTracker;
+RunEngine runEngine;
+RunOutput lastRunOutput;
 float titrantPumpFlowRateGps = 0.0f;
 float samplePumpFlowRateGps = 0.0f;
-float initialBottleWeight = 0.0f;
+int titrantPumpRunUs = TITRANT_PUMP_DEFAULT_RUN_US;
+int samplePumpRunUs = SAMPLE_PUMP_DEFAULT_RUN_US;
+int titrantDosePercent = TITRANT_DOSE_DEFAULT_PERCENT;
+uint16_t titrantBurstOnMs = TITRANT_BURST_ON_DEFAULT_MS;
+uint16_t titrantBurstOffMs = TITRANT_BURST_OFF_DEFAULT_MS;
+bool manualSweepActive = false;
+bool manualSweepTitrant = true;
+int manualSweepStartUs = TITRANT_PUMP_DEFAULT_RUN_US;
+int manualSweepEndUs = PUMP_MAX_RUN_US;
+int manualSweepLastUs = 0;
+uint32_t manualSweepStartedMs = 0;
+uint32_t manualSweepDurationMs = 10000;
+uint32_t manualSweepLastCommandMs = 0;
 float sampleStartWeight = 0.0f;
 float sampleDeliveredGrams = 0.0f;
-float sampleLastProgressGrams = 0.0f;
 float consumedGrams = 0.0f;
 float endpointUsedGrams = 0.0f;
 float resultValue = 0.0f;
-float stoichPredoseTargetGrams = 0.0f;
 uint32_t stateStartedMs = 0;
-uint32_t runStartedMs = 0;
-uint32_t endpointHoldStartedMs = 0;
-uint32_t sampleFillingStartedMs = 0;
-uint32_t sampleLastProgressMs = 0;
-uint16_t activePulseMs = 0;
-uint16_t activeSettleMs = 0;
+uint32_t displayedPulseMs = 0;
 uint8_t sensorFaultCount = 0;
 bool phReady = false;
 bool scaleReady = false;
@@ -588,6 +718,9 @@ bool sensorFault = false;
 bool displayDirty = true;
 bool webReady = false;
 bool otaReady = false;
+bool httpOtaSafetyLock = false;
+bool httpOtaInProgress = false;
+bool httpOtaSucceeded = false;
 bool restartPending = false;
 uint32_t restartAtMs = 0;
 bool calibrationNeedsReset = false;
@@ -607,6 +740,11 @@ struct MethodAuxValues {
   float manualResultFactor = 1.0f;
 };
 
+MethodAuxValues defaultMethodAux(TitrationMethod method);
+MethodAuxValues loadMethodAux(TitrationMethod method);
+void applyMethodAux(TitrationSettings &targetSettings, const MethodAuxValues &aux);
+void loadMethodAuxIntoSettings(TitrationMethod method);
+
 bool devicePresent(uint8_t address) {
   Wire.beginTransmission(address);
   return Wire.endTransmission() == 0;
@@ -619,7 +757,77 @@ void setState(RunState next, const String &status) {
   displayDirty = true;
 }
 
+int currentManualSweepUs() {
+  if (!manualSweepActive || manualSweepDurationMs == 0) {
+    return manualSweepLastUs > 0 ? manualSweepLastUs : manualSweepStartUs;
+  }
+  uint32_t elapsed = millis() - manualSweepStartedMs;
+  if (elapsed >= manualSweepDurationMs) {
+    return manualSweepEndUs;
+  }
+  long delta = (long)manualSweepEndUs - (long)manualSweepStartUs;
+  long current = (long)manualSweepStartUs + (delta * (long)elapsed) / (long)manualSweepDurationMs;
+  return constrainPumpRunUs((int)current);
+}
+
+void stopManualSweep(bool stopPumps) {
+  manualSweepActive = false;
+  manualSweepLastCommandMs = 0;
+  if (stopPumps) {
+    pump.stop();
+    samplePump.stop();
+  }
+}
+
+void startManualSweep(bool titrant, int startUs, int endUs, uint16_t seconds) {
+  if (httpOtaSafetyLock) {
+    statusLine = "OTA locked";
+    displayDirty = true;
+    return;
+  }
+  manualSweepActive = true;
+  manualSweepTitrant = titrant;
+  manualSweepStartUs = constrainPumpRunUs(startUs);
+  manualSweepEndUs = constrainPumpRunUs(endUs);
+  manualSweepStartedMs = millis();
+  manualSweepDurationMs = (uint32_t)constrain(seconds, 1, 120) * 1000UL;
+  manualSweepLastUs = 0;
+  manualSweepLastCommandMs = 0;
+  if (manualSweepTitrant) {
+    samplePump.stop();
+  } else {
+    pump.stop();
+  }
+  statusLine = String("Sweep ") + (manualSweepTitrant ? "titrant" : "sample");
+  displayDirty = true;
+}
+
+void updateManualSweep() {
+  if (!manualSweepActive) {
+    return;
+  }
+  uint32_t now = millis();
+  int currentUs = currentManualSweepUs();
+  if (currentUs != manualSweepLastUs || now - manualSweepLastCommandMs >= 1000UL) {
+    if (manualSweepTitrant) {
+      pump.runContinuousAtUs(currentUs);
+    } else {
+      samplePump.runContinuousAtUs(currentUs);
+    }
+    manualSweepLastUs = currentUs;
+    manualSweepLastCommandMs = now;
+    statusLine = String("Sweep ") + (manualSweepTitrant ? "titrant " : "sample ") + String(currentUs) + "us";
+    displayDirty = true;
+  }
+  if (now - manualSweepStartedMs >= manualSweepDurationMs) {
+    stopManualSweep(true);
+    statusLine = String("Sweep done @ ") + String(currentUs) + "us";
+    displayDirty = true;
+  }
+}
+
 void updatePumpTimeouts() {
+  updateManualSweep();
   pump.update();
   samplePump.update();
 }
@@ -685,82 +893,6 @@ float estimateStoichTitrantGrams() {
     return 0.0f;
   }
   return sampleMilliliters * settings.titrantDensityGramsPerMl;
-}
-
-void refreshStoichPredoseTarget() {
-  float estimate = estimateStoichTitrantGrams();
-  stoichPredoseTargetGrams = estimate * STOICH_PREDOSE_RATIO;
-  if (settings.maxConsumedGrams > 0.0f && stoichPredoseTargetGrams > settings.maxConsumedGrams) {
-    stoichPredoseTargetGrams = settings.maxConsumedGrams;
-  }
-}
-
-bool applyStoichPredoseIfNeeded() {
-  if (stoichPredoseTargetGrams <= 0.0f ||
-      consumedGrams >= stoichPredoseTargetGrams ||
-      !acidBaseStoichPredoseAllowed()) {
-    return false;
-  }
-
-  const float target = activeControlTarget();
-  const float current = activeControlValue();
-  const bool doseRaisesValue = doseIncreasesControlValue(settings);
-  const bool shouldDose = doseRaisesValue ? current < target : current > target;
-  const float error = absoluteFloat(current - target);
-  if (!shouldDose || error <= settings.controlBand * 3.0f) {
-    return false;
-  }
-  if (error <= settings.controlBand * 6.0f && phDynamics.isSteep(settings.endpoint)) {
-    return false;
-  }
-
-  float remainingPredose = stoichPredoseTargetGrams - consumedGrams;
-  float stepGrams = remainingPredose < STOICH_PREDOSE_STEP_G ? remainingPredose : STOICH_PREDOSE_STEP_G;
-  uint16_t pulseMs = STOICH_PREDOSE_FALLBACK_PULSE_MS;
-  if (titrantPumpFlowRateGps > 0.001f && stepGrams > 0.0f) {
-    uint32_t computed = (uint32_t)(stepGrams * 1000.0f / titrantPumpFlowRateGps);
-    if (computed < STOICH_PREDOSE_FALLBACK_PULSE_MS) {
-      computed = STOICH_PREDOSE_FALLBACK_PULSE_MS;
-    }
-    if (computed > STOICH_PREDOSE_MAX_PULSE_MS) {
-      computed = STOICH_PREDOSE_MAX_PULSE_MS;
-    }
-    pulseMs = (uint16_t)computed;
-  }
-
-  activePulseMs = pulseMs;
-  activeSettleMs = clampSettleMs(settings, STOICH_PREDOSE_SETTLE_MS);
-  pump.runForMs(activePulseMs);
-  setState(RunState::Dosing, String("Predose ") + String(consumedGrams, 1) + "/" + String(stoichPredoseTargetGrams, 1) + "g");
-  return true;
-}
-
-bool recordEqpPointIfEnabled() {
-  if (!autoEqpEnabled() || !phReady || !scaleReady) {
-    return false;
-  }
-  bool reached = eqpTracker.add(consumedGrams, activeControlValue());
-  if (eqpTracker.bestUsedGrams > 0.0f) {
-    endpointUsedGrams = eqpTracker.bestUsedGrams;
-  }
-  return reached;
-}
-
-void updateSampleDeliveredFromPumpEstimate() {
-  if (state != RunState::SampleFilling ||
-      sampleFillingStartedMs == 0 ||
-      samplePumpFlowRateGps <= 0.001f ||
-      !samplePump.isRunning()) {
-    return;
-  }
-  float estimated = (float)(millis() - sampleFillingStartedMs) * samplePumpFlowRateGps / 1000.0f;
-  if (estimated > sampleDeliveredGrams) {
-    sampleDeliveredGrams = estimated;
-    if (sampleDeliveredGrams - sampleLastProgressGrams >= 0.2f) {
-      sampleLastProgressGrams = sampleDeliveredGrams;
-      sampleLastProgressMs = millis();
-    }
-  }
 }
 
 String titrantLabel() {
@@ -985,8 +1117,6 @@ void selectMethod(TitrationMethod method, bool persist) {
   applyTitrationMethodPreset(settings, currentMethod);
   loadMethodAuxIntoSettings(currentMethod);
   phFilter.reset();
-  phDynamics.reset();
-  eqpTracker.reset();
   phReady = false;
   phSampleFresh = false;
   resetRunData();
@@ -1116,116 +1246,24 @@ void tareScale() {
 }
 
 void resetRunData() {
+  runEngine.reset();
+  lastRunOutput = RunOutput{};
   pump.stop();
   samplePump.stop();
   phFilter.reset();
-  phDynamics.reset();
-  eqpTracker.reset();
   scaleFilter.reset(scaleReady ? lastScale.grams : 0.0f);
   sensorFaultCount = 0;
   sensorFault = false;
   sampleStartWeight = scaleReady ? lastScale.grams : 0.0f;
   sampleDeliveredGrams = 0.0f;
-  sampleLastProgressGrams = 0.0f;
-  sampleFillingStartedMs = 0;
-  sampleLastProgressMs = 0;
-  initialBottleWeight = scaleReady ? lastScale.grams : 0.0f;
   consumedGrams = 0.0f;
   endpointUsedGrams = 0.0f;
   resultValue = 0.0f;
-  stoichPredoseTargetGrams = 0.0f;
+  displayedPulseMs = 0;
   phReady = false;
   phSampleFresh = false;
   stopReason = TitrationStopReason::None;
   displayDirty = true;
-}
-
-bool startTitration() {
-  if (!lastPh.adcOk || !scaleReady || sensorFault) {
-    pump.stop();
-    samplePump.stop();
-    stopReason = TitrationStopReason::InvalidReading;
-    setState(RunState::Error, "Sensor missing");
-    return false;
-  }
-
-  pump.stop();
-  samplePump.stop();
-  phFilter.reset();
-  phDynamics.reset();
-  eqpTracker.reset();
-  scaleFilter.reset(lastScale.grams);
-  sensorFaultCount = 0;
-  sensorFault = false;
-  sampleStartWeight = lastScale.grams;
-  sampleDeliveredGrams = 0.0f;
-  sampleLastProgressGrams = 0.0f;
-  sampleFillingStartedMs = 0;
-  sampleLastProgressMs = 0;
-  initialBottleWeight = lastScale.grams;
-  consumedGrams = 0.0f;
-  endpointUsedGrams = 0.0f;
-  resultValue = 0.0f;
-  refreshStoichPredoseTarget();
-  runStartedMs = 0;
-  endpointHoldStartedMs = 0;
-  phReady = false;
-  stopReason = TitrationStopReason::None;
-  runStartedMs = millis();
-  endpointHoldStartedMs = 0;
-  if (settings.sampleGrams <= 0.01f) {
-    setState(RunState::FilterWarmup, "Stabilizing pH");
-  } else {
-    samplePump.runContinuous();
-    sampleFillingStartedMs = millis();
-    sampleLastProgressMs = sampleFillingStartedMs;
-    sampleLastProgressGrams = 0.0f;
-    setState(RunState::SampleFilling, "Filling sample");
-  }
-  return true;
-}
-
-bool startExistingSampleTitration() {
-  if (!lastPh.adcOk || !scaleReady || sensorFault) {
-    pump.stop();
-    samplePump.stop();
-    stopReason = TitrationStopReason::InvalidReading;
-    setState(RunState::Error, "Sensor missing");
-    return false;
-  }
-
-  pump.stop();
-  samplePump.stop();
-  phFilter.reset();
-  phDynamics.reset();
-  eqpTracker.reset();
-  scaleFilter.reset(lastScale.grams);
-  sensorFaultCount = 0;
-  sensorFault = false;
-  sampleStartWeight = lastScale.grams;
-  sampleDeliveredGrams = settings.sampleGrams;
-  sampleLastProgressGrams = settings.sampleGrams;
-  sampleFillingStartedMs = 0;
-  sampleLastProgressMs = 0;
-  initialBottleWeight = lastScale.grams;
-  consumedGrams = 0.0f;
-  endpointUsedGrams = 0.0f;
-  resultValue = 0.0f;
-  refreshStoichPredoseTarget();
-  runStartedMs = millis();
-  endpointHoldStartedMs = 0;
-  phReady = false;
-  phSampleFresh = false;
-  stopReason = TitrationStopReason::None;
-  setState(RunState::FilterWarmup, "Existing sample");
-  return true;
-}
-
-void stopTitration(const String &message) {
-  pump.stop();
-  samplePump.stop();
-  stopReason = TitrationStopReason::None;
-  setState(RunState::Done, message);
 }
 
 bool isActiveState() {
@@ -1236,35 +1274,147 @@ bool isActiveState() {
          state == RunState::Settling;
 }
 
-void pauseTitration() {
-  if (!isActiveState()) {
-    return;
+RunState runStateForPhase(RunPhase phase) {
+  switch (phase) {
+    case RunPhase::SampleFilling: return RunState::SampleFilling;
+    case RunPhase::FilterWarmup: return RunState::FilterWarmup;
+    case RunPhase::Running: return RunState::Running;
+    case RunPhase::Dosing: return RunState::Dosing;
+    case RunPhase::Settling: return RunState::Settling;
+    case RunPhase::Paused: return RunState::Paused;
+    case RunPhase::Done: return RunState::Done;
+    case RunPhase::Error: return RunState::Error;
+    case RunPhase::Inactive: return RunState::SetupMode;
   }
-  pausedFromState = state;
-  pump.stop();
-  samplePump.stop();
-  setState(RunState::Paused, "Paused");
+  return RunState::SetupMode;
 }
 
-void resumeTitration() {
-  if (state != RunState::Paused) {
+String runStatusText(RunStatusCode status) {
+  switch (status) {
+    case RunStatusCode::FillingSample: return "Filling sample";
+    case RunStatusCode::WaitingForStableSignal: return "Stabilizing pH";
+    case RunStatusCode::ReStabilizingAfterResume: return "正在重新稳定信号";
+    case RunStatusCode::CheckingEndpoint: return "Checking";
+    case RunStatusCode::Dosing: return "Dosing";
+    case RunStatusCode::Settling: return "Settling";
+    case RunStatusCode::HoldingEndpoint: return "Holding endpoint";
+    case RunStatusCode::Paused: return "Paused";
+    case RunStatusCode::TargetReached: return "Target reached";
+    case RunStatusCode::EquivalencePointReached: return "Equivalence point";
+    case RunStatusCode::SafetyLocked: return "OTA locked";
+    case RunStatusCode::SensorFault: return "Sensor missing";
+    case RunStatusCode::ScaleFailure: return "Scale error";
+    case RunStatusCode::SampleProgressTimeout: return "Sample scale stalled";
+    case RunStatusCode::SampleFillTimeout: return "Sample timeout";
+    case RunStatusCode::MassLimit: return "Mass limit";
+    case RunStatusCode::TimeLimit: return "Time limit";
+    case RunStatusCode::EmergencyStopped: return "Emergency stop";
+    case RunStatusCode::Inactive: return "Ready";
+  }
+  return "Ready";
+}
+
+TitrationStopReason displayStopReason(RunStopReason reason) {
+  switch (reason) {
+    case RunStopReason::TargetReached: return TitrationStopReason::TargetReached;
+    case RunStopReason::EquivalencePoint: return TitrationStopReason::EquivalencePoint;
+    case RunStopReason::MassLimit: return TitrationStopReason::MassLimit;
+    case RunStopReason::TimeLimit: return TitrationStopReason::TimeLimit;
+    case RunStopReason::SensorFault: return TitrationStopReason::SensorFault;
+    case RunStopReason::InvalidReading: return TitrationStopReason::InvalidReading;
+    case RunStopReason::SafetyLock:
+    case RunStopReason::ScaleFailure:
+    case RunStopReason::SampleProgressTimeout:
+    case RunStopReason::SampleFillTimeout:
+    case RunStopReason::None: return TitrationStopReason::None;
+  }
+  return TitrationStopReason::None;
+}
+
+void applyPumpIntent(PumpController &target, const PumpIntent &intent, bool titrant) {
+  if (intent.mode == PumpMode::Stop) {
+    target.stop();
+  } else if (intent.mode == PumpMode::RunContinuous) {
+    target.runContinuous();
+  } else if (intent.mode == PumpMode::RunForMs) {
+    if (titrant) {
+      target.runForMsAtUsBurst(intent.durationMs, titrantPumpRunUs, titrantBurstOnMs, titrantBurstOffMs);
+    } else {
+      target.runForMsAtUs(intent.durationMs, samplePumpRunUs);
+    }
+  }
+}
+
+RunInput buildRunInput(RunCommand command) {
+  RunInput input{};
+  input.nowMs = millis();
+  input.command = command;
+  input.sensor.ph = lastPh.ph;
+  input.sensor.millivolts = lastPh.millivolts;
+  input.sensor.controlValue = activeControlValue();
+  input.sensor.reactorMassGrams = lastScale.grams;
+  input.sensor.consumedTitrantGrams = consumedGrams;
+  input.sensor.deliveredSampleGrams = command == RunCommand::StartExistingSample ? settings.sampleGrams : sampleDeliveredGrams;
+  input.sensor.sensorValid = lastPh.adcOk && phReady && !sensorFault;
+  input.sensor.sensorFresh = phSampleFresh;
+  input.sensor.controlSettled = phFilter.ready();
+  input.sensor.scaleValid = scaleReady;
+  input.context.targetSampleGrams = settings.sampleGrams;
+  input.context.samplePumpFlowRateGps = samplePumpFlowRateGps;
+  input.context.titrantPumpFlowRateGps = titrantPumpFlowRateGps;
+  input.context.maximumTitrantGrams = settings.maxConsumedGrams;
+  input.context.maximumRunMs = (uint32_t)settings.maxTimeSeconds * 1000UL;
+  input.context.settings = settings;
+  input.context.automaticEqp = autoEqpEnabled();
+  input.context.otaLocked = httpOtaSafetyLock;
+  return input;
+}
+
+void applyRunOutput(const RunOutput &output) {
+  const RunPhase previousPhase = lastRunOutput.phase;
+  if (output.titrant.mode != PumpMode::Stop || output.phase != previousPhase) {
+    applyPumpIntent(pump, output.titrant, true);
+  }
+  if (output.sample.mode != PumpMode::Stop || output.phase != previousPhase) {
+    applyPumpIntent(samplePump, output.sample, false);
+  }
+  displayedPulseMs = output.titrant.mode == PumpMode::RunForMs ? output.titrant.durationMs : 0U;
+  stopReason = displayStopReason(output.stopReason);
+  if (output.finalizeResult) {
+    endpointUsedGrams = output.selectedUsedTitrantGrams;
+    consumedGrams = output.selectedUsedTitrantGrams;
+    resultValue = computeTitrationResult(settings, activeTitrantMolarity(), endpointUsedGrams, settings.sampleGrams);
+  }
+  setState(runStateForPhase(output.phase), runStatusText(output.status));
+  lastRunOutput = output;
+}
+
+void dispatchRunCommand(RunCommand command) {
+  const bool startsRun = command == RunCommand::StartNormal || command == RunCommand::StartExistingSample;
+  if (startsRun && (!lastPh.adcOk || !scaleReady || sensorFault)) {
+    pump.stop();
+    samplePump.stop();
+    stopReason = TitrationStopReason::InvalidReading;
+    setState(RunState::Error, "Sensor missing");
     return;
   }
-  if (pausedFromState == RunState::SampleFilling && sampleDeliveredGrams < settings.sampleGrams) {
-    samplePump.runContinuous();
-    sampleFillingStartedMs = millis();
-    sampleLastProgressMs = sampleFillingStartedMs;
-    sampleLastProgressGrams = sampleDeliveredGrams;
-    setState(RunState::SampleFilling, "Filling sample");
-  } else if (pausedFromState == RunState::FilterWarmup || !phReady) {
+  if (command == RunCommand::StartNormal || command == RunCommand::StartExistingSample) {
     pump.stop();
     samplePump.stop();
-    setState(RunState::FilterWarmup, "Stabilizing pH");
-  } else {
-    pump.stop();
-    samplePump.stop();
-    setState(RunState::Running, "Checking");
+    phFilter.reset();
+    scaleFilter.reset(lastScale.grams);
+    sampleStartWeight = lastScale.grams;
+    sampleDeliveredGrams = command == RunCommand::StartExistingSample ? settings.sampleGrams : 0.0f;
+    consumedGrams = 0.0f;
+    endpointUsedGrams = 0.0f;
+    resultValue = 0.0f;
+    phReady = false;
+    phSampleFresh = false;
   }
+  if (command == RunCommand::Reset) {
+    resetRunData();
+  }
+  applyRunOutput(runEngine.step(buildRunInput(command)));
 }
 
 uint32_t stateColor() {
@@ -1381,11 +1531,19 @@ void handleButton(ButtonEvent event) {
     return;
   }
 
+  if (httpOtaSafetyLock) {
+    if (event == ButtonEvent::ABLong) {
+      pump.stop();
+      samplePump.stop();
+      dispatchRunCommand(RunCommand::EmergencyStop);
+    }
+    return;
+  }
+
   if (event == ButtonEvent::ABLong) {
     pump.stop();
     samplePump.stop();
-    stopReason = TitrationStopReason::None;
-    setState(RunState::Done, "Emergency stop");
+    dispatchRunCommand(RunCommand::EmergencyStop);
     return;
   }
 
@@ -1425,7 +1583,7 @@ void handleButton(ButtonEvent event) {
       } else if (event == ButtonEvent::B) {
         setState(RunState::Calibrating, "Calibrating pumps");
       } else if (event == ButtonEvent::ABShort) {
-        startTitration();
+        dispatchRunCommand(RunCommand::StartNormal);
       }
       break;
 
@@ -1438,21 +1596,20 @@ void handleButton(ButtonEvent event) {
 
     case RunState::Paused:
       if (event == ButtonEvent::ABShort) {
-        resumeTitration();
+        dispatchRunCommand(RunCommand::Resume);
       }
       break;
 
     case RunState::Done:
     case RunState::Error:
       if (event == ButtonEvent::ABShort) {
-        resetRunData();
-        setState(RunState::SetupMode, "Reset");
+        dispatchRunCommand(RunCommand::Reset);
       }
       break;
 
     default:
       if (event == ButtonEvent::ABShort) {
-        pauseTitration();
+        dispatchRunCommand(RunCommand::Pause);
       }
       break;
   }
@@ -1481,8 +1638,6 @@ void sampleSensors() {
         pump.stop();
         samplePump.stop();
         Serial.println("SENSOR_FAULT");
-        stopReason = TitrationStopReason::SensorFault;
-        setState(RunState::Error, "SENSOR_FAULT");
       }
 
       // Second-stage median-trimmed-mean filter (PhFilter) running in the
@@ -1508,9 +1663,6 @@ void sampleSensors() {
         lastPh.ok = isValidPh(lastPh.ph);
         phReady = lastPh.ok && !sensorFault;
         phSampleFresh = phReady;
-        if (phReady) {
-          phDynamics.add(activeControlValue(), millis());
-        }
       } else {
         phReady = false;
       }
@@ -1530,7 +1682,7 @@ void sampleSensors() {
   lastScale = scaleFilter.apply(rawScale, isActiveState());
   scaleReady = lastScale.ok;
   if (scaleReady) {
-    if (state == RunState::SampleFilling) {
+      if (runEngine.phase() == RunPhase::SampleFilling) {
       float delivered = computeSampleGainGrams(sampleStartWeight, lastScale.grams);
       if (rawScale.ok) {
         float rawDelivered = computeSampleGainGrams(sampleStartWeight, rawScale.grams);
@@ -1540,249 +1692,14 @@ void sampleSensors() {
       }
       if (delivered > sampleDeliveredGrams) {
         sampleDeliveredGrams = delivered;
-        if (sampleDeliveredGrams - sampleLastProgressGrams >= 0.2f) {
-          sampleLastProgressGrams = sampleDeliveredGrams;
-          sampleLastProgressMs = millis();
-        }
       }
-    }
-    float consumed = computeSampleGainGrams(initialBottleWeight, lastScale.grams);
-    if (consumed > consumedGrams) {
-      consumedGrams = consumed;
     }
   }
   displayDirty = true;
 }
 
 void runController() {
-  updatePumpTimeouts();
-
-  if (state == RunState::SampleFilling) {
-    updateSampleDeliveredFromPumpEstimate();
-
-    if (!scaleReady) {
-      pump.stop();
-      samplePump.stop();
-      stopReason = TitrationStopReason::InvalidReading;
-      setState(RunState::Error, "Scale error");
-      return;
-    }
-
-    if (sampleFillingStartedMs == 0) {
-      sampleFillingStartedMs = millis();
-      sampleLastProgressMs = sampleFillingStartedMs;
-      sampleLastProgressGrams = sampleDeliveredGrams;
-    }
-
-    uint32_t sampleMaxMs = 0;
-    if (samplePumpFlowRateGps > 0.001f && settings.sampleGrams > 0.0f) {
-      sampleMaxMs = (uint32_t)((settings.sampleGrams / samplePumpFlowRateGps) * 1200.0f) + SAMPLE_FILL_EXTRA_MS;
-    }
-    if (sampleMaxMs > 0 && millis() - sampleFillingStartedMs > sampleMaxMs) {
-      pump.stop();
-      samplePump.stop();
-      stopReason = TitrationStopReason::InvalidReading;
-      setState(RunState::Error, "Sample timeout");
-      return;
-    }
-    if (millis() - sampleLastProgressMs > SAMPLE_PROGRESS_TIMEOUT_MS) {
-      pump.stop();
-      samplePump.stop();
-      stopReason = TitrationStopReason::InvalidReading;
-      setState(RunState::Error, "Sample scale stalled");
-      return;
-    }
-
-    if (sampleDeliveredGrams >= settings.sampleGrams) {
-      samplePump.stop();
-      phFilter.reset();
-      phReady = false;
-      float reactorWeight = lastScale.grams;
-      float deliveredByFiltered = computeSampleGainGrams(sampleStartWeight, lastScale.grams);
-      if (sampleDeliveredGrams > deliveredByFiltered) {
-        reactorWeight = sampleStartWeight + sampleDeliveredGrams;
-      }
-      initialBottleWeight = reactorWeight;
-      scaleFilter.reset(reactorWeight);
-      consumedGrams = 0.0f;
-      endpointUsedGrams = 0.0f;
-      eqpTracker.reset();
-      refreshStoichPredoseTarget();
-      setState(RunState::FilterWarmup, "Stabilizing pH");
-    } else {
-      samplePump.runContinuous();
-      statusLine = String("Sample ") + String(sampleDeliveredGrams, 1) + "/" + String(settings.sampleGrams, 1) + "g";
-      displayDirty = true;
-    }
-    return;
-  }
-
-  if (state == RunState::FilterWarmup) {
-    pump.stop();
-    samplePump.stop();
-    if (sensorFault) {
-      return;
-    }
-    if (phReady) {
-      recordEqpPointIfEnabled();
-      setState(RunState::Running, "Checking");
-    }
-    return;
-  }
-
-  if (state == RunState::Dosing && activePulseMs > 0 && millis() - stateStartedMs >= activePulseMs) {
-    pump.stop();
-    setState(RunState::Settling, "Settling");
-    return;
-  }
-  if (state == RunState::Dosing) {
-    return;
-  }
-
-  if (state == RunState::Settling) {
-    pump.stop();
-    uint32_t elapsed = millis() - stateStartedMs;
-    uint16_t settleMs = activeSettleMs > 0 ? activeSettleMs : SETTLING_TIME_MS;
-    if (elapsed < settleMs) {
-      return;
-    }
-    if (!autoEqpEnabled() && phReady && isEndpointReached(settings, activeControlValue())) {
-      stopReason = TitrationStopReason::TargetReached;
-      resultValue = computeCurrentResult();
-      setState(RunState::Done, reasonLabel(stopReason));
-      return;
-    }
-    uint32_t maxSettleMs = (uint32_t)settings.maxSettleSeconds * 1000UL;
-    if (maxSettleMs < settleMs) {
-      maxSettleMs = settleMs;
-    }
-    if (elapsed < maxSettleMs && (!phSampleFresh || !phDynamics.isSettledWithin(settings.stableDelta))) {
-      statusLine = String("Settling ") + endpointText();
-      displayDirty = true;
-      return;
-    }
-    if (recordEqpPointIfEnabled()) {
-      pump.stop();
-      stopReason = TitrationStopReason::EquivalencePoint;
-      resultValue = computeCurrentResult();
-      setState(RunState::Done, reasonLabel(stopReason));
-      return;
-    }
-    setState(RunState::Running, "Checking");
-    return;
-  }
-
-  if (state != RunState::Running && state != RunState::Dosing) {
-    return;
-  }
-
-  if (!phSampleFresh) {
-    return;
-  }
-
-  if (!phReady || !scaleReady || sensorFault) {
-    pump.stop();
-    samplePump.stop();
-    stopReason = TitrationStopReason::InvalidReading;
-    if (sensorFault) {
-      stopReason = TitrationStopReason::SensorFault;
-    }
-    setState(RunState::Error, reasonLabel(stopReason));
-    return;
-  }
-
-  if (runStartedMs > 0 && settings.maxTimeSeconds > 0 &&
-      millis() - runStartedMs >= (uint32_t)settings.maxTimeSeconds * 1000UL) {
-    pump.stop();
-    samplePump.stop();
-    stopReason = TitrationStopReason::TimeLimit;
-    setState(RunState::Error, "Time limit");
-    return;
-  }
-
-  if (autoEqpEnabled() && recordEqpPointIfEnabled()) {
-    pump.stop();
-    stopReason = TitrationStopReason::EquivalencePoint;
-    resultValue = computeCurrentResult();
-    setState(RunState::Done, reasonLabel(stopReason));
-    return;
-  }
-
-  if (!autoEqpEnabled() && isEndpointReached(settings, activeControlValue())) {
-    if (endpointHoldStartedMs == 0) {
-      endpointHoldStartedMs = millis();
-    }
-    uint32_t holdMs = (uint32_t)settings.holdSeconds * 1000UL;
-    if (holdMs == 0 || millis() - endpointHoldStartedMs >= holdMs) {
-      pump.stop();
-      stopReason = TitrationStopReason::TargetReached;
-      resultValue = computeCurrentResult();
-      setState(RunState::Done, reasonLabel(stopReason));
-    } else {
-      pump.stop();
-      statusLine = String("Holding ") + endpointText();
-      displayDirty = true;
-    }
-    return;
-  }
-  endpointHoldStartedMs = 0;
-
-  if (applyStoichPredoseIfNeeded()) {
-    return;
-  }
-
-  TitrationDecision decision = autoEqpEnabled()
-      ? decideEqpDose(settings, activeControlValue(), consumedGrams, eqpTracker)
-      : decideAdaptiveDose(settings, activeControlValue(), consumedGrams, phDynamics);
-
-  if (decision.action == TitrationAction::Dose) {
-    activePulseMs = decision.pumpPulseMs;
-    activeSettleMs = decision.settleMs;
-    pump.runForMs(decision.pumpPulseMs);
-    setState(RunState::Dosing, String("Pulse ") + String(decision.pumpPulseMs) + "ms");
-  } else if (decision.action == TitrationAction::Wait) {
-    activePulseMs = 0;
-    activeSettleMs = decision.settleMs;
-    pump.stop();
-    setState(RunState::Settling, String("Watching ") + endpointText());
-  } else if (decision.action == TitrationAction::Done) {
-    bool wasRunning = pump.isRunning();
-    pump.stop();
-    stopReason = decision.reason;
-    if (wasRunning) {
-      setState(RunState::Settling, "Settling");
-    } else {
-      resultValue = computeCurrentResult();
-      setState(RunState::Done, reasonLabel(stopReason));
-    }
-  } else {
-    pump.stop();
-    samplePump.stop();
-    stopReason = decision.reason;
-    setState(RunState::Error, reasonLabel(stopReason));
-  }
-}
-
-String htmlEscape(const String &value) {
-  String out = value;
-  out.replace("&", "&amp;");
-  out.replace("<", "&lt;");
-  out.replace(">", "&gt;");
-  out.replace("\"", "&quot;");
-  out.replace("'", "&#39;");
-  return out;
-}
-
-String jsonEscape(const String &value) {
-  String out = value;
-  out.replace("\\", "\\\\");
-  out.replace("\"", "\\\"");
-  out.replace("\b", "\\b");
-  out.replace("\f", "\\f");
-  out.replace("\n", "\\n");
-  out.replace("\r", "\\r");
-  out.replace("\t", "\\t");
-  return out;
+  dispatchRunCommand(RunCommand::Tick);
 }
 
 void loadWifiSettings() {
@@ -1809,334 +1726,177 @@ void scheduleRestart(const String &message) {
 }
 
 String htmlPage() {
-  String page;
-  page.reserve(20000);
-  int usedPercent = (int)constrain((consumedGrams / settings.maxConsumedGrams) * 100.0f, 0.0f, 100.0f);
-  page += F("<!doctype html><html><head><meta charset='utf-8'>");
-  page += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
-  page += F("<title>K10 pH Titrator</title><style>");
-  page += F(":root{--bg:#071014;--panel:#0d1d24;--panel2:#102a34;--line:#244c59;--text:#eaf7ff;--muted:#8db0bd;--ok:#67f09a;--warn:#ffd15c;--bad:#ff6b6b;--blue:#7bd5ff}");
-  page += F("*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#15333b 0,#071014 38%,#04080a 100%);color:var(--text);font-family:Verdana,Geneva,sans-serif}");
-  page += F("main{max-width:880px;margin:auto;padding:16px}.top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}.brand{letter-spacing:.08em;color:var(--muted);font-size:12px}.title{font-size:28px;font-weight:700;margin:2px 0 0}.pill{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;max-width:100%;color:var(--blue)}.pill span{border:1px solid var(--line);border-radius:999px;padding:7px 10px;background:#071820;white-space:nowrap}");
-  page += F(".hero{border:1px solid var(--line);border-radius:10px;background:linear-gradient(135deg,#0f2630,#081219);padding:18px;margin-bottom:12px;display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.ph{font-size:72px;line-height:.95;font-weight:800}.unit{font-size:18px;color:var(--muted);margin-left:6px}.sub{color:var(--muted);margin-top:10px}.status{display:grid;gap:8px;align-content:center}.status b{font-size:22px}");
-  page += F(".grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.card{border:1px solid var(--line);border-radius:8px;padding:13px;background:rgba(13,29,36,.9)}.k{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.07em}.v{font-size:28px;font-weight:700;margin-top:5px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}");
-  page += F(".bar{height:10px;background:#071014;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-top:10px}.fill{height:100%;background:linear-gradient(90deg,var(--ok),var(--warn))}.split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.split>.full{grid-column:1/-1}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}label{display:grid;gap:5px;color:var(--muted);font-size:12px;min-width:130px;flex:1}");
-  page += F("button,.btn,input,select{font:inherit;border-radius:7px;border:1px solid #3a6472;background:#0a1a21;color:var(--text);padding:10px 12px;text-decoration:none}button,.btn{display:inline-block;cursor:pointer;font-weight:700}.primary{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.danger{background:#351216;border-color:#8c3640;color:#ffd1d1}.ghost{color:var(--blue)}h2{margin:0 0 10px;font-size:16px}.tiny{font-size:12px;color:var(--muted)}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tab{background:#071820;color:var(--blue)}.tab.active{background:#123b2b;border-color:#2d8a5a;color:#bfffd4}.panel{display:none}.panel.active{display:block}.full{margin-top:10px}.mini{max-width:170px}.chart{width:100%;height:260px;border:1px solid var(--line);border-radius:8px;background:#071014;cursor:crosshair}.chartbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:10px}.chartbar label{min-width:110px;max-width:180px}.eqp{color:var(--warn);font-weight:700}.guide{display:grid;grid-template-columns:1fr 1fr;gap:10px}.guide p{margin:7px 0}.term{color:var(--blue);font-weight:700}@media(max-width:720px){.hero,.split,.guide{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.ph{font-size:58px}.top{display:block}.pill{justify-content:flex-start;margin-top:8px}.pill span{border-radius:7px}}</style></head><body><main>");
-  page += F("<style>.ph,.v,#status,#mv{font-variant-numeric:tabular-nums}.ph{min-height:72px}.sub{min-height:22px}</style>");
-
-  page += F("<div class='top'><div><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>Potentiometric Titrator</div></div><div id='network' class='pill'>");
-  page += F("<span>");
-  page += htmlEscape(networkLabel);
-  page += F("</span><span>AP ");
-  page += htmlEscape(apIpAddress);
-  page += F("</span><span>STA ");
-  page += htmlEscape(staIpAddress);
-  page += otaReady ? F("</span><span>OTA ON</span>") : F("</span><span>OTA OFF</span>");
-  page += F("</div></div>");
-
-  page += F("<section class='hero'><div><div id='primarylabel' class='k'>Current ");
-  page += endpointText();
-  page += F("</div><div id='ph' class='ph ");
-  page += lastPh.adcOk ? (phReady ? F("ok'>") : F("warn'>")) : F("warn'>");
-  page += F("<span id='primaryvalue'>");
-  if (lastPh.adcOk && settings.endpoint == ControlEndpoint::Millivolts) {
-    page += String(lastPh.millivolts, 0);
-  } else if (lastPh.adcOk) {
-    page += String(lastPh.ph, 2);
-  } else if (settings.endpoint == ControlEndpoint::Millivolts) {
-    page += F("--");
-  } else {
-    page += F("--.--");
-  }
-  page += F("</span><span id='primaryunit' class='unit'>");
-  page += endpointText();
-  page += F("</span></div><div id='mv' class='sub'><span id='secondaryvalue'>");
-  if (lastPh.adcOk && settings.endpoint == ControlEndpoint::Millivolts) {
-    page += String(lastPh.ph, 2);
-    page += F("</span> pH from ADS1115 A0");
-  } else if (lastPh.adcOk) {
-    page += String(lastPh.millivolts, 0);
-    page += F("</span> mV from ADS1115 A0");
-  } else if (settings.endpoint == ControlEndpoint::Millivolts) {
-    page += F("--.--</span> pH from ADS1115 A0");
-  } else {
-    page += F("--</span> mV from ADS1115 A0");
-  }
-  page += F("</div></div><div class='status'><div class='k'>State</div><b id='state'>");
-  page += stateLabel();
-  page += F("</b><div id='status' class='sub'>");
-  page += htmlEscape(statusLine);
-  page += F("</div><div>Pump: <span id='pump'>");
-  page += pump.isRunning() ? F("<span class='warn'>ON</span>") : F("<span class='ok'>STOP</span>");
-  page += F("</span></div></div></section>");
-
-  page += F("<section class='grid'><div class='card'><div class='k'>Target <span id='targetunit'>");
-  page += endpointText();
-  page += F("</span></div><div id='target' class='v'>");
-  page += settings.endpoint == ControlEndpoint::Millivolts ? String(settings.targetMillivolts, 0) : String(settings.targetPh, 2);
-  page += F("</div></div><div class='card'><div class='k'>mV</div><div id='mvcard' class='v'>");
-  page += lastPh.adcOk ? String(lastPh.millivolts, 0) : F("--");
-  page += F("</div></div><div class='card'><div class='k'>Trend</div><div id='mode' class='v'>");
-  page += modeLabel();
-  page += F("</div></div><div class='card'><div class='k'>Used</div><div id='used' class='v ");
-  page += consumedGrams >= settings.maxConsumedGrams ? F("bad'>") : F("ok'>");
-  page += String(consumedGrams, 1);
-  page += F(" g</div><div class='bar'><div class='fill' style='width:");
-  page += String(usedPercent);
-  page += F("%'></div></div><div id='limit' class='tiny'>Limit ");
-  page += String(settings.maxConsumedGrams, 0);
-  page += F(" g</div></div><div class='card'><div class='k'>Reactor</div><div id='bottle' class='v'>");
-  page += scaleReady ? String(lastScale.grams, 1) : F("--");
-  page += F(" g</div></div><div class='card'><div class='k'>Sample</div><div id='sample' class='v'>");
-  page += String(sampleDeliveredGrams, 1);
-  page += F(" g</div><div id='sampletarget' class='tiny'>Target ");
-  page += String(settings.sampleGrams, 1);
-  page += F(" g</div></div></section>");
-
-  page += F("<nav class='tabs'><button class='tab active' data-tab='run' type='button'>Run</button><button class='tab' data-tab='cal' type='button'>Calibration</button><button class='tab' data-tab='manual' type='button'>Manual</button><button class='tab' data-tab='admin' type='button'>Admin</button><button class='tab' data-tab='guide' type='button'>Guide</button></nav>");
-  page += F("<section id='tab-run' class='panel active'><div class='card full'><h2>Actions</h2><div class='row'>");
-  page += state == RunState::Paused ? F("<a class='btn primary' href='/action?cmd=start'>Resume</a>") : F("<a class='btn primary' href='/action?cmd=start'>Start</a>");
-  page += F("<a class='btn' href='/action?cmd=start_existing'>Start current sample</a>");
-  page += F("<a class='btn' href='/action?cmd=stop'>Pause</a>");
-  page += F("<a class='btn' href='/action?cmd=tare'>Tare scale</a>");
-  page += F("<a class='btn ghost' href='/action?cmd=reset'>Reset</a>");
-  page += F("<a class='btn danger' href='/action?cmd=panic'>Emergency stop</a>");
-  page += F("</div><p class='tiny'>ADC ");
-  page += lastPh.adcOk ? F("OK") : F("NO DATA");
-  page += F(" / raw ");
-  page += String(lastPh.raw);
-  page += F(" / pH valid ");
-  page += phReady ? F("yes") : F("no");
-  page += F(" / scale ");
-  page += scaleReady ? F("OK") : F("NO");
-  page += F("</p><p id='netdetail' class='tiny'>AP ");
-  page += htmlEscape(apIpAddress);
-  page += F(" / STA ");
-  page += htmlEscape(staIpAddress);
-  page += F(" / OTA host ");
-  page += htmlEscape(String(OTA_HOSTNAME));
-  page += F("</p><p class='tiny'><a class='ghost' href='/json'>JSON status</a> / Source <a class='ghost' href='https://github.com/KnowFlow/OpenTitrator/tree/codex/ph-titrator'>KnowFlow/OpenTitrator</a> / <a class='ghost' href='https://github.com/rockets-cn/k10-ph-titrator/tree/codex/ph-titrator'>rockets-cn mirror</a></p></div>");
-  page += F("<div class='card full'><h2>Run Data</h2><div class='chartbar'>");
-  page += F("<label>X axis<select id='chartX'><option value='time' selected>Time s</option><option value='used'>Used g</option></select></label>");
-  page += F("<label>Y axis<select id='chartY'><option value='auto'>Endpoint</option><option value='ph'>pH</option><option value='mv'>mV</option></select></label>");
-  page += F("<button id='curveClear' type='button'>Clear</button><button id='eqpAuto' type='button'>Auto EQP</button><button id='learnParams' type='button'>Suggest Params</button><button id='curveCsv' type='button'>CSV</button><button id='curveJson' type='button'>JSON</button>");
-  page += F("</div><canvas id='curveCanvas' class='chart' width='820' height='260'></canvas><p id='curveInfo' class='tiny'>0 points</p><p id='eqpInfo' class='tiny'>EQP waits for dose changes. Click the curve to correct the candidate point.</p><p id='learnInfo' class='tiny'>Suggestions wait for at least 4 dose-change points.</p><canvas id='derivCanvas' class='chart' width='820' height='140'></canvas><p id='derivInfo' class='tiny'>Derivative d(signal) / d(used g)</p></div></section>");
-
-  page += F("<section id='tab-cal' class='panel'><div class='card full'><h2>Calibration Start</h2><div class='row'>");
-  page += F("<a class='btn' href='/action?cmd=ready'>Enter ready</a>");
-  page += F("<a class='btn primary' href='/action?cmd=calibrate'>Calibrate pumps</a>");
-  page += F("<a class='btn' href='/action?cmd=scale_calibrate'>Tare scale</a>");
-  page += F("<a class='btn' href='/action?cmd=ph_signal_calibrate'>Reset pH/mV filter</a>");
-  page += F("</div><p class='tiny'>Enter ready stops both pumps and puts the controller in READY. Pump calibration can then be started here or with the K10 B key. Each pump runs 2 s, then waits 5 s before reading the scale.</p></div>");
-  page += F("<form action='/set' method='get' class='split'>");
-  page += F("<div class='card'><h2>Pump Flow</h2><div class='row'>");
-  page += F("<label>Titrant pump g/s<input name='titrant_gps' type='number' min='0' max='100' step='0.001' value='");
-  page += String(titrantPumpFlowRateGps, 3);
-  page += F("'></label><label>Sample pump g/s<input name='sample_gps' type='number' min='0' max='100' step='0.001' value='");
-  page += String(samplePumpFlowRateGps, 3);
-  page += F("'></label></div><p class='tiny'>Measures each pump independently by mass. Re-run after tubing, pump head, liquid, or viscosity changes.</p></div>");
-  page += F("<div class='card'><h2>Scale</h2><div class='row'><label>Scale factor<input name='scale_factor' type='number' min='1' max='100000' step='0.1' value='");
-  page += String(scaleSensor.calibrationFactor(), 1);
-  page += F("'></label></div><p class='tiny'>Tare scale resets the reactor baseline. Scale factor is the HX711 conversion value used for grams.</p></div>");
-  page += F("<div class='card full'><h2>pH/mV Sensor</h2><p class='tiny'>Live ");
-  page += String(lastPh.millivolts, 0);
-  page += F(" mV / ");
-  page += String(lastPh.ph, 2);
-  page += F(" pH. Status: ");
-  page += htmlEscape(phCalibrationStatus());
-  page += F(" / slope ");
-  page += String(phCalibrationSlopePercent(), 1);
-  page += F("% / pH7 offset ");
-  page += String(phCalibrationOffsetAtPh7Mv(), 1);
-  page += F(" mV.</p><div class='row'>");
-  page += F("<label>Buffer 1 pH<input name='low_ph' type='number' min='0' max='14' step='0.01' value='");
-  page += String(phCalibration.lowPh, 2);
-  page += F("'></label><label>Buffer 1 probe mV<input name='low_probe_mv' type='number' min='-1000' max='1000' step='0.1' value='");
-  page += String(phCalibration.lowProbeMillivolts, 1);
-  page += F("'></label><label>Buffer 1 ADS mV<input name='low_ads_mv' type='number' min='-4096' max='4096' step='0.1' value='");
-  page += String(phCalibration.lowAdsMillivolts, 1);
-  page += F("'></label></div><div class='row' style='margin-top:10px'>");
-  page += F("<label>Buffer 2 pH<input name='high_ph' type='number' min='0' max='14' step='0.01' value='");
-  page += String(phCalibration.highPh, 2);
-  page += F("'></label><label>Buffer 2 probe mV<input name='high_probe_mv' type='number' min='-1000' max='1000' step='0.1' value='");
-  page += String(phCalibration.highProbeMillivolts, 1);
-  page += F("'></label><label>Buffer 2 ADS mV<input name='high_ads_mv' type='number' min='-4096' max='4096' step='0.1' value='");
-  page += String(phCalibration.highAdsMillivolts, 1);
-  page += F("'></label></div><p class='tiny'>Save two buffer points after entering the actual buffer pH and measured probe/ADS mV values. Reset pH/mV filter only restarts acquisition; it does not overwrite saved calibration.</p></div>");
-  page += F("<div class='card'><h2>Titrant Standard</h2><p class='tiny'>Current titrant: ");
-  page += htmlEscape(titrantLabel());
-  page += F("</p><p class='tiny'>Result formula: ");
-  page += htmlEscape(resultFormulaLabel());
-  page += F(" / blank ");
-  page += String(settings.blankGrams, 2);
-  page += F(" g.</p><p class='tiny'>Use Admin for known titrant molarity, blank, and formula. A future standardization step can calculate titrant factor from a primary standard.</p></div>");
-  page += F("<div class='card'><h2>Save</h2><p class='tiny'>Saving stores pump flow, scale factor, and pH/mV two-point calibration in flash. WiFi and method settings are kept separate.</p><button class='primary' type='submit'>Save calibration</button></div></form></section>");
-
-  page += F("<section id='tab-manual' class='panel'><div class='card full'><h2>Manual Operation</h2><form id='manualForm' action='/action' method='get' class='row'><label class='mini'>Run seconds<input name='sec' type='number' min='0.1' max='30' step='0.1' value='1.0'></label><button class='btn' name='cmd' value='manual_titrant' type='submit'>Run titrant pump</button><button class='btn' name='cmd' value='manual_sample' type='submit'>Run sample pump</button><button class='btn danger' name='cmd' value='manual_stop' type='submit'>Stop pumps</button></form><p class='tiny'>Manual pump actions are blocked while titration or calibration is active. Use seconds here for priming tubing and experiment preparation.</p></div></section>");
-
-  page += F("<section id='tab-admin' class='panel'><div class='split'><div><form action='/set' method='get' class='card'><h2>Settings</h2><div class='row'>");
-  page += F("<label>Method<select id='methodSelect' name='method'><option value='ph_ep'");
-  if (currentMethod == TitrationMethod::PhEndpoint) page += F(" selected");
-  page += F(">pH endpoint</option><option value='mv_ep'");
-  if (currentMethod == TitrationMethod::MvEndpoint) page += F(" selected");
-  page += F(">mV endpoint</option><option value='edta_hardness'");
-  if (currentMethod == TitrationMethod::EdtaHardness) page += F(" selected");
-  page += F(">EDTA hardness</option><option value='manual'");
-  if (currentMethod == TitrationMethod::Manual) page += F(" selected");
-  page += F(">Manual method</option></select></label>");
-  page += F("<label>Signal trend<select id='trendSelect' name='trend'><option value='rise'");
-  if (settings.controlTrend == ControlTrend::Increase) page += F(" selected");
-  page += F(">Dose raises signal</option><option value='fall'");
-  if (settings.controlTrend == ControlTrend::Decrease) page += F(" selected");
-  page += F(">Dose lowers signal</option></select></label>");
-  page += F("<label>Endpoint<select id='endpointSelect' name='endpoint'><option value='ph'");
-  if (settings.endpoint == ControlEndpoint::Ph) page += F(" selected");
-  page += F(">pH</option><option value='mv'");
-  if (settings.endpoint == ControlEndpoint::Millivolts) page += F(" selected");
-  page += F(">mV</option></select></label>");
-  page += F("<label>Target pH<input id='targetPhInput' name='target' type='number' min='0' max='14' step='0.05' value='");
-  page += String(settings.targetPh, 2);
-  page += F("'></label><label>Target mV<input id='targetMvInput' name='target_mv' type='number' min='-1000' max='1000' step='1' value='");
-  page += String(settings.targetMillivolts, 0);
-  page += F("'></label><label>Max used g<input id='maxInput' name='max' type='number' min='1' max='1000' step='1' value='");
-  page += String(settings.maxConsumedGrams, 1);
-  page += F("'></label><label>Sample g<input id='sampleInput' name='sample' type='number' min='0' max='1000' step='0.1' value='");
-  page += String(settings.sampleGrams, 1);
-  page += F("'></label></div><div class='row' style='margin-top:10px'>");
-  page += F("<label>Titrant<select id='titrantSelect' name='titrant'><option value='naoh001'");
-  if (settings.titrantPreset == TitrantPreset::Naoh001) page += F(" selected");
-  page += F(">0.01 mol/L NaOH</option><option value='hcl001'");
-  if (settings.titrantPreset == TitrantPreset::Hcl001) page += F(" selected");
-  page += F(">0.01 mol/L HCl</option><option value='edta001'");
-  if (settings.titrantPreset == TitrantPreset::Edta001) page += F(" selected");
-  page += F(">0.01 mol/L EDTA</option><option value='manual'");
-  if (settings.titrantPreset == TitrantPreset::Manual) page += F(" selected");
-  page += F(">Manual</option></select></label>");
-  page += F("<label>Manual mol/L<input id='titrantMInput' name='titrant_m' type='number' min='0.0001' max='10' step='0.0001' value='");
-  page += String(settings.titrantMolarity, 4);
-  page += F("'></label><label>Result formula<select id='resultFormulaSelect' name='result_formula'><option value='acid_base_m'");
-  if (settings.resultFormula == ResultFormula::AcidBaseMolar) page += F(" selected");
-  page += F(">Acid/base mol/L</option><option value='edta_hardness'");
-  if (settings.resultFormula == ResultFormula::EdtaHardnessCaCO3) page += F(" selected");
-  page += F(">EDTA hardness</option><option value='manual_factor'");
-  if (settings.resultFormula == ResultFormula::ManualFactor) page += F(" selected");
-  page += F(">Manual factor</option></select></label><label>Blank g<input id='blankInput' name='blank_g' type='number' min='0' max='1000' step='0.01' value='");
-  page += String(settings.blankGrams, 2);
-  page += F("'></label></div><div class='row' style='margin-top:10px'><label>Titrant density g/mL<input id='titrantDensityInput' name='titrant_density' type='number' min='0.1' max='5' step='0.001' value='");
-  page += String(settings.titrantDensityGramsPerMl, 3);
-  page += F("'></label><label>Sample density g/mL<input id='sampleDensityInput' name='sample_density' type='number' min='0.1' max='5' step='0.001' value='");
-  page += String(settings.sampleDensityGramsPerMl, 3);
-  page += F("'></label><label>Manual factor<input id='manualFactorInput' name='manual_factor' type='number' min='-1000000' max='1000000' step='0.0001' value='");
-  page += String(settings.manualResultFactor, 4);
-  page += F("'></label><label>Control band<input id='controlBandInput' name='control_band' type='number' min='0.001' max='1000' step='0.001' value='");
-  page += String(settings.controlBand, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
-  page += F("'></label><label>Stable delta/s<input id='stableDeltaInput' name='stable_delta' type='number' min='0.001' max='1000' step='0.001' value='");
-  page += String(settings.stableDelta, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
-  page += F("'></label></div><div class='row' style='margin-top:10px'>");
-  page += F("<label>Hold s<input id='holdInput' name='hold_s' type='number' min='0' max='120' step='1' value='");
-  page += String(settings.holdSeconds);
-  page += F("'></label><label>Min settle s<input id='minSettleInput' name='min_settle_s' type='number' min='1' max='120' step='1' value='");
-  page += String(settings.minSettleSeconds);
-  page += F("'></label><label>Max settle s<input id='maxSettleInput' name='max_settle_s' type='number' min='1' max='180' step='1' value='");
-  page += String(settings.maxSettleSeconds);
-  page += F("'></label><label>Max time s<input id='maxTimeInput' name='max_time_s' type='number' min='10' max='7200' step='10' value='");
-  page += String(settings.maxTimeSeconds);
-  page += F("'></label></div><p class='tiny'>Active titrant: <span id='titrant'>");
-  page += htmlEscape(titrantLabel());
-  page += F("</span> / result <span id='resultm'>");
-  page += String(resultValue, (unsigned int)resultDecimals());
-  page += F("</span> <span id='resultunit'>");
-  page += htmlEscape(resultUnit());
-  page += F("</span></p><p class='tiny'>Titrant flow <span id='titrantgps'>");
-  page += String(titrantPumpFlowRateGps, 3);
-  page += F("</span> g/s / Sample flow <span id='samplegps'>");
-  page += String(samplePumpFlowRateGps, 3);
-  page += F("</span> g/s</p><p class='tiny'>Use pH or mV as the endpoint, then choose whether dosing makes that signal rise or fall.");
-  if (autoEqpEnabled()) {
-    page += F(" EDTA hardness uses automatic EQP stop from the mV slope curve.");
-  }
-  page += F("</p><button class='primary' type='submit'>Save settings</button></form>");
-
-  page += F("<form action='/set' method='get' class='card' style='margin-top:10px'><h2>WiFi</h2><div class='row'>");
-  page += F("<label>SSID<input name='ssid' maxlength='32' value='");
-  page += htmlEscape(wifiSsid);
-  page += F("' placeholder='Leave empty for AP only'></label>");
-  page += F("<label>Password<input name='wifi_password' type='password' maxlength='64' placeholder='Leave blank to keep'></label>");
-  page += F("</div><p class='tiny'>AP stays on. Blank SSID disables STA. Changing WiFi restarts the controller.</p>");
-  page += F("<button class='primary' type='submit'>Save WiFi</button></form></div></div></section>");
-  page += F("<section id='tab-guide' class='panel'><div class='guide'>");
-  page += F("<div class='card'><h2>Method and Endpoint</h2><p><span class='term'>Method</span> loads a preset group of endpoint, titrant, result formula, and control defaults. Manual keeps custom values.</p><p><span class='term'>Endpoint</span> selects the control signal. Use pH for acid/base endpoint work, or mV for potentiometric endpoints.</p><p><span class='term'>Signal trend</span> tells the controller whether dosing should raise or lower the endpoint signal.</p><p><span class='term'>Target pH / mV</span> is the EP stop value. Only the active endpoint is used for control.</p></div>");
-  page += F("<div class='card'><h2>Endpoint Control</h2><p><span class='term'>Control band</span> is the near-target zone. Larger values slow dosing earlier; smaller values dose faster but risk overshoot.</p><p><span class='term'>Stable delta/s</span> is the allowed signal drift while settling. Lower values wait for a flatter response.</p><p><span class='term'>Hold s</span> confirms the endpoint after it is reached. If the signal moves back out, dosing resumes.</p><p><span class='term'>Min / Max settle s</span> controls wait time after each pulse. Slow probes or slow reactions need longer settling.</p><p><span class='term'>Max time s</span> stops a run that takes too long.</p></div>");
-  page += F("<div class='card'><h2>Calibration</h2><p><span class='term'>Enter ready</span> stops both pumps before any calibration action.</p><p><span class='term'>Pump flow</span> measures titrant and sample pump delivery in g/s. Recalibrate after tubing, pump head, or liquid changes.</p><p><span class='term'>Scale</span> uses tare for the reactor baseline; scale factor is the grams conversion value.</p><p><span class='term'>pH/mV sensor</span> stores two buffer points and reports slope %, pH7 offset, and status. Reset pH/mV filter only restarts acquisition.</p><p><span class='term'>Titrant standard</span> is configured in Admin through molarity, blank, and result formula.</p></div>");
-  page += F("<div class='card'><h2>Dosing and Results</h2><p><span class='term'>Titrant</span> selects the known solution. Manual mol/L is used only when titrant is Manual.</p><p><span class='term'>Max used g</span> is the safety limit for titrant consumption.</p><p><span class='term'>Sample g</span> is the sample mass delivered by the P1 pump before titration.</p><p><span class='term'>Result formula</span> controls only calculation and display; it does not change pump control.</p><p><span class='term'>Blank g</span> subtracts blank titration consumption before calculating and is saved per Method.</p><p><span class='term'>Density g/mL</span> converts scale mass to mL for molarity and EDTA hardness. Defaults 1.000 for water-like solutions.</p><p><span class='term'>Manual factor</span> uses result = net titrant g x factor / sample g for custom tests. Manual mol/L, blank, densities, and factor are method auxiliary values.</p></div>");
-  page += F("<div class='card'><h2>Run Data and EQP</h2><p><span class='term'>Time s</span> is the safer default X axis because data keeps moving even while used g is unchanged.</p><p><span class='term'>Used g</span> is useful for final analysis after enough dose changes have happened.</p><p><span class='term'>Auto EQP</span> on the chart marks the largest d(signal)/d(used g) candidate for review. EDTA hardness also uses a firmware-side EQP tracker to stop after the mV slope peak falls back.</p><p><span class='term'>Suggest Params</span> estimates control band, stable delta, and settle time from the current curve. It does not apply settings automatically.</p><p>Click the curve to manually correct the EQP point, then export CSV or JSON to save the run on the computer.</p></div>");
-  page += F("</div></section>");
-  page += F("<script>");
-  page += F("function text(id,v){var e=document.getElementById(id);if(e)e.textContent=v}");
-  page += F("function html(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v}");
-  page += F("var curve=[],curveStart=0,eqpManual=null,lastPlot=[];function num(v){return Number(v||0)}function curveTarget(d){return d.endpoint==='mV'?num(d.target_mv):num(d.target_ph)}");
-  page += F("function recordCurve(d){if(!d.adc_ok)return;var now=Date.now();if(!curveStart)curveStart=now;curve.push({ts:new Date(now).toISOString(),elapsed_s:(now-curveStart)/1000,ph:num(d.ph),mv:num(d.mv),used_g:num(d.used_g),endpoint_used_g:num(d.endpoint_used_g),sample_g:num(d.sample_delivered_g),endpoint:d.endpoint,target:curveTarget(d),trend:d.mode,state:d.state,pump:!!d.pump,pulse_ms:num(d.pump_pulse_ms),status:d.status,method:d.method,result_value:num(d.result_value),result_unit:d.result_unit,result_formula:d.result_formula,blank_g:num(d.blank_g),titrant_density:num(d.titrant_density),sample_density:num(d.sample_density),auto_eqp:!!d.auto_eqp,eqp_reached:!!d.eqp_reached,eqp_used_g:num(d.eqp_used_g),eqp_signal:num(d.eqp_signal),eqp_slope:num(d.eqp_slope),manual_factor:num(d.manual_factor)});var cutoff=now-86400000;while(curve.length&&new Date(curve[0].ts).getTime()<cutoff)curve.shift();drawCurve()}");
-  page += F("function dosePoints(){var pts=[];curve.forEach(function(p){if(!isFinite(p.used_g))return;if(pts.length&&Math.abs(p.used_g-pts[pts.length-1].used_g)<0.01){pts[pts.length-1]=p}else pts.push(p)});return pts}");
-  page += F("function analyzeEqp(){var pts=dosePoints();if(pts.length<3)return null;var yk=pts[pts.length-1].endpoint==='mV'?'mv':'ph',best=null;for(var i=1;i<pts.length;i++){var dx=pts[i].used_g-pts[i-1].used_g;if(Math.abs(dx)<0.01)continue;var dy=pts[i][yk]-pts[i-1][yk],s=Math.abs(dy/dx);if(!best||s>best.slope){best={mode:'auto',index:i,used_g:pts[i].used_g,elapsed_s:pts[i].elapsed_s,signal:pts[i][yk],ph:pts[i].ph,mv:pts[i].mv,endpoint:pts[i].endpoint,slope:s}}}return best}");
-  page += F("function currentEqp(){var a=analyzeEqp();return eqpManual||a}function eqpText(e){if(!e)return 'EQP waits for at least 3 dose-change points.';var v=e.endpoint==='mV'?e.signal.toFixed(0)+' mV':e.signal.toFixed(2)+' pH';return (e.mode==='manual'?'Manual':'Auto')+' EQP: '+e.used_g.toFixed(2)+' g, '+v+', slope '+e.slope.toFixed(e.endpoint==='mV'?1:3)+' '+e.endpoint+'/g'}");
-  page += F("function median(a){if(!a.length)return 0;var b=a.slice().sort(function(x,y){return x-y}),m=Math.floor(b.length/2);return b.length%2?b[m]:(b[m-1]+b[m])/2}function clamp(v,a,b){return Math.max(a,Math.min(b,v))}");
-  page += F("function suggestParams(){var pts=dosePoints();if(pts.length<4){text('learnInfo','Need at least 4 dose-change points before recommending parameters.');return}var ep=pts[pts.length-1].endpoint,yk=ep==='mV'?'mv':'ph',dose=[],slope=[],timeSlope=[];for(var i=1;i<pts.length;i++){var dx=pts[i].used_g-pts[i-1].used_g,dy=pts[i][yk]-pts[i-1][yk],dt=pts[i].elapsed_s-pts[i-1].elapsed_s;if(Math.abs(dx)>=0.01){dose.push(Math.abs(dx));slope.push(Math.abs(dy/dx))}if(dt>0)timeSlope.push(Math.abs(dy/dt))}if(!slope.length){text('learnInfo','Need changing used g values before recommending parameters.');return}var md=median(dose),ms=Math.max.apply(null,slope),drift=median(timeSlope);var mv=ep==='mV';var band=mv?clamp(ms*md*2.0,10,120):clamp(ms*md*2.0,0.10,1.50);var stable=mv?clamp(Math.max(drift*1.5,0.3),0.3,5.0):clamp(Math.max(drift*1.5,0.003),0.003,0.050);var steep=mv?ms>80:ms>2.0;var minSettle=steep?10:5,maxSettle=steep?60:30;var msg='Suggested: control band '+band.toFixed(mv?1:3)+', stable delta/s '+stable.toFixed(mv?1:3)+', min/max settle '+minSettle+'/'+maxSettle+' s';msg+=' from max slope '+ms.toFixed(mv?1:3)+' '+ep+'/g and median dose '+md.toFixed(2)+' g. Review before applying in Admin.';text('learnInfo',msg)}");
-  page += F("function drawCurve(){var c=document.getElementById('curveCanvas');if(!c)return;var r=c.getBoundingClientRect();if(r.width>0&&c.width!==Math.floor(r.width)){c.width=Math.floor(r.width);c.height=260}var g=c.getContext('2d'),w=c.width,h=c.height,l=58,t=18,ri=18,b=36;lastPlot=[];g.clearRect(0,0,w,h);g.fillStyle='#071014';g.fillRect(0,0,w,h);g.strokeStyle='#244c59';g.lineWidth=1;g.strokeRect(l,t,w-l-ri,h-t-b);text('curveInfo',curve.length+' points');text('eqpInfo',eqpText(currentEqp()));if(curve.length<2){drawDeriv();return}var xs=document.getElementById('chartX'),ys=document.getElementById('chartY');var xk=xs&&xs.value==='used'?'used_g':'elapsed_s';var ysel=ys?ys.value:'auto';var yk=ysel==='auto'?(curve[curve.length-1].endpoint==='mV'?'mv':'ph'):ysel;var yl=yk==='ph'?'pH':'mV';var view=curve;if(xk==='elapsed_s'){var latest=curve[curve.length-1].elapsed_s,from=Math.max(curve[0].elapsed_s,latest-600);view=curve.filter(function(p){return p.elapsed_s>=from})}var pts=[];view.forEach(function(p){if(xk==='used_g'&&pts.length&&Math.abs(p.used_g-pts[pts.length-1].used_g)<0.01){pts[pts.length-1]=p}else pts.push(p)});var info=curve.length+' saved / '+pts.length+' shown'+(xk==='elapsed_s'?' / last 10 min':'');text('curveInfo',info);if(pts.length<2){text('curveInfo',info+' / waiting for '+(xk==='used_g'?'dose change':'more samples'));drawDeriv();return}var smooth=pts.map(function(p,i){var s=0,n=0;for(var j=Math.max(0,i-2);j<=Math.min(pts.length-1,i+2);j++){s+=pts[j][yk];n++}var q=Object.assign({},p);q[yk]=s/n;return q});var last=pts[pts.length-1],lastSmooth=smooth[smooth.length-1],tgt=last.target,tol=yk==='mv'?5:0.05;var minx=pts[0][xk],maxx=pts[0][xk],miny=pts[0][yk],maxy=miny;pts.concat(smooth).forEach(function(p){if(p[xk]<minx)minx=p[xk];if(p[xk]>maxx)maxx=p[xk];if(p[yk]<miny)miny=p[yk];if(p[yk]>maxy)maxy=p[yk]});if(yk==='ph'){miny=1;maxy=14}else{if(tgt>0){miny=Math.min(miny,tgt-tol);maxy=Math.max(maxy,tgt+tol)}if(maxy===miny)maxy=miny+1;var ypad=(maxy-miny)*0.10;miny-=ypad;maxy+=ypad}if(maxx===minx)maxx=minx+1;var px=function(x){return l+(x-minx)/(maxx-minx)*(w-l-ri)};var py=function(y){return h-b-(y-miny)/(maxy-miny)*(h-t-b)};if(yk==='ph'){[{a:4,b:6,c:'rgba(85,190,255,0.10)'},{a:6,b:8,c:'rgba(103,240,154,0.11)'},{a:8,b:10,c:'rgba(255,209,92,0.10)'}].forEach(function(z){g.fillStyle=z.c;g.fillRect(l,py(z.b),w-l-ri,py(z.a)-py(z.b))});[4,7,10].forEach(function(v){g.strokeStyle='rgba(141,176,189,0.25)';g.lineWidth=1;g.beginPath();g.moveTo(l,py(v));g.lineTo(w-ri,py(v));g.stroke();g.fillStyle='#8db0bd';g.font='10px Verdana';g.fillText(String(v),l-18,py(v)+3)})}if(tgt>0){var ty1=py(tgt+tol),ty2=py(tgt-tol),ty=py(tgt);g.fillStyle='rgba(255,77,77,0.12)';g.fillRect(l,Math.min(ty1,ty2),w-l-ri,Math.abs(ty2-ty1));g.strokeStyle='#ff4d4d';g.lineWidth=1;g.setLineDash([6,4]);g.beginPath();g.moveTo(l,ty);g.lineTo(w-ri,ty);g.stroke();g.setLineDash([]);g.fillStyle='#ff6b6b';g.font='11px Verdana';g.fillText('target '+tgt.toFixed(yk==='ph'?2:0)+' ±'+tol.toFixed(yk==='ph'?2:0),w-ri-120,ty-5)}g.strokeStyle='rgba(103,240,154,0.28)';g.lineWidth=1;g.beginPath();pts.forEach(function(p,i){var x=px(p[xk]),y=py(p[yk]);lastPlot.push({x:x,y:y,p:p,yk:yk});if(i)g.lineTo(x,y);else g.moveTo(x,y)});g.stroke();g.strokeStyle='#67f09a';g.lineWidth=3;g.beginPath();smooth.forEach(function(p,i){var x=px(p[xk]),y=py(p[yk]);if(i)g.lineTo(x,y);else g.moveTo(x,y)});g.stroke();var lx=px(last[xk]),ly=py(lastSmooth[yk]);g.fillStyle='#eaf7ff';g.strokeStyle='#071014';g.lineWidth=2;g.beginPath();g.arc(lx,ly,5,0,6.283);g.fill();g.stroke();var err=last[yk]-tgt,tag=(yk==='ph'?last[yk].toFixed(2):last[yk].toFixed(0))+' '+yl+(tgt>0?' / Δ '+(err>=0?'+':'')+err.toFixed(yk==='ph'?2:0):'');g.fillStyle='rgba(7,16,20,0.86)';g.fillRect(Math.max(l,lx-154),Math.max(t,ly-28),150,22);g.fillStyle='#eaf7ff';g.font='12px Verdana';g.fillText(tag,Math.max(l+4,lx-150),Math.max(t+14,ly-13));var e=currentEqp();if(e){var ex=px(xk==='used_g'?e.used_g:e.elapsed_s),ey=py(yk==='mv'?e.mv:e.ph);if(ex>=l&&ex<=w-ri){g.strokeStyle='#ffd15c';g.fillStyle='#ffd15c';g.lineWidth=1;g.beginPath();g.moveTo(ex,t);g.lineTo(ex,h-b);g.stroke();g.beginPath();g.arc(ex,ey,5,0,6.283);g.fill()}}var lastPump=false;var doseCount=0;view.forEach(function(p){if(p.pump&&!lastPump&&p[xk]>=minx&&p[xk]<=maxx){var dx=px(p[xk]);g.strokeStyle='rgba(255,210,74,0.4)';g.lineWidth=1;g.setLineDash([2,6]);g.beginPath();g.moveTo(dx,t);g.lineTo(dx,h-b);g.stroke();g.setLineDash([]);if(++doseCount<=8){g.fillStyle='rgba(255,210,74,0.7)';g.font='9px Verdana';g.fillText((p.pulse_ms||0)+'ms',dx+2,t+10)}}lastPump=p.pump});g.fillStyle='#8db0bd';g.font='12px Verdana';g.fillText(xk==='used_g'?'used g':'time s',w-86,h-10);g.fillText(yl,l,13);g.fillText(miny.toFixed(yk==='ph'?0:0),8,h-b);g.fillText(maxy.toFixed(yk==='ph'?0:0),8,t+5);drawDeriv()}");
-  page += F("function drawDeriv(){var c=document.getElementById('derivCanvas');if(!c)return;var r=c.getBoundingClientRect();if(r.width>0&&c.width!==Math.floor(r.width)){c.width=Math.floor(r.width);c.height=140}var g=c.getContext('2d'),w=c.width,h=c.height,l=58,t=14,ri=18,b=30;g.clearRect(0,0,w,h);g.fillStyle='#071014';g.fillRect(0,0,w,h);g.strokeStyle='#244c59';g.lineWidth=1;g.strokeRect(l,t,w-l-ri,h-t-b);var pts=dosePoints();if(pts.length<3){text('derivInfo','Derivative d(signal) / d(used g) - need >=3 dose-change points');return}var yk=pts[pts.length-1].endpoint==='mV'?'mv':'ph';var derivs=[];for(var i=1;i<pts.length;i++){var dx=pts[i].used_g-pts[i-1].used_g;if(Math.abs(dx)<0.005)continue;var dy=pts[i][yk]-pts[i-1][yk];derivs.push({x:(pts[i].used_g+pts[i-1].used_g)/2,y:dy/dx})}if(derivs.length<2){text('derivInfo','Derivative d(signal) / d(used g) - need more dose separation');return}var minx=derivs[0].x,maxx=derivs[0].x,miny=derivs[0].y,maxy=miny;derivs.forEach(function(d){if(d.x<minx)minx=d.x;if(d.x>maxx)maxx=d.x;if(d.y<miny)miny=d.y;if(d.y>maxy)maxy=d.y});if(maxx===minx)maxx=minx+0.1;if(maxy===miny)maxy=Math.max(miny+1,Math.abs(miny)*0.2);var ypad=(maxy-miny)*0.1;miny-=ypad;maxy+=ypad;var px=function(x){return l+(x-minx)/(maxx-minx)*(w-l-ri)};var py=function(y){return h-b-(y-miny)/(maxy-miny)*(h-t-b)};g.strokeStyle='#48e27b';g.lineWidth=2;g.beginPath();derivs.forEach(function(d,i){var x=px(d.x),y=py(d.y);if(i)g.lineTo(x,y);else g.moveTo(x,y)});g.stroke();var e=currentEqp();if(e){var ex=px(e.used_g),ey=py(e.slope);g.strokeStyle='#ffd15c';g.fillStyle='#ffd15c';g.lineWidth=1;g.beginPath();g.moveTo(ex,t);g.lineTo(ex,h-b);g.stroke();g.beginPath();g.arc(ex,ey,4,0,6.283);g.fill()}g.fillStyle='#8db0bd';g.font='11px Verdana';g.fillText('used g',w-70,h-8);g.fillText('d'+yk+'/dg',l,10);g.fillText(miny.toFixed(yk==='ph'?3:1),4,h-b);g.fillText(maxy.toFixed(yk==='ph'?3:1),4,t+5);text('derivInfo','Derivative d('+yk+')/dg - '+derivs.length+' slope points')}");
-  page += F("function chooseEqpAt(ev){if(!lastPlot.length)return;var c=ev.currentTarget,r=c.getBoundingClientRect(),x=(ev.clientX-r.left)*c.width/r.width,y=(ev.clientY-r.top)*c.height/r.height,b=null;lastPlot.forEach(function(pt){var d=(pt.x-x)*(pt.x-x)+(pt.y-y)*(pt.y-y);if(!b||d<b.d)b={d:d,pt:pt}});if(!b)return;var auto=analyzeEqp(),p=b.pt.p,yk=b.pt.yk;eqpManual={mode:'manual',used_g:p.used_g,elapsed_s:p.elapsed_s,signal:p[yk],ph:p.ph,mv:p.mv,endpoint:yk==='mv'?'mV':'pH',slope:auto?auto.slope:0};drawCurve()}");
-  page += F("function exportCurve(fmt){if(!curve.length)return;var eqp=currentEqp();var data,mime,name;if(fmt==='json'){data=JSON.stringify({eqp:eqp,points:curve},null,2);mime='application/json';name='titration-data.json'}else{var keys=Object.keys(curve[0]).concat(['eqp_used_g','eqp_signal','eqp_slope','eqp_mode']);data=keys.join(',')+'\\n'+curve.map(function(r){return keys.map(function(k){var v=k==='eqp_used_g'&&eqp?eqp.used_g:k==='eqp_signal'&&eqp?eqp.signal:k==='eqp_slope'&&eqp?eqp.slope:k==='eqp_mode'&&eqp?eqp.mode:r[k];return String(v===undefined?'':v).replace(/\"/g,'\"\"')}).join(',')}).join('\\n');mime='text/csv';name='titration-data.csv'}var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type:mime}));a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},1000)}");
-  page += F("async function poll(){try{let r=await fetch('/json',{cache:'no-store'});let d=await r.json();");
-  page += F("let mvMode=d.endpoint==='mV';text('primarylabel','Current '+d.endpoint);text('primaryunit',d.endpoint);");
-  page += F("text('primaryvalue',d.adc_ok?(mvMode?Number(d.mv).toFixed(0):Number(d.ph).toFixed(2)):(mvMode?'--':'--.--'));");
-  page += F("text('secondaryvalue',d.adc_ok?(mvMode?Number(d.ph).toFixed(2):Number(d.mv).toFixed(0)):(mvMode?'--.--':'--'));var se=document.getElementById('secondaryvalue');if(se&&se.parentNode)se.parentNode.lastChild.textContent=mvMode?' pH from ADS1115 A0':' mV from ADS1115 A0';");
-  page += F("text('state',d.state);text('status',d.status);");
-  page += F("html('pump',d.pump?'<span class=\"warn\">ON</span>':'<span class=\"ok\">STOP</span>');");
-  page += F("text('targetunit',d.endpoint);text('target',d.endpoint==='mV'?Number(d.target_mv).toFixed(0):Number(d.target_ph).toFixed(2));text('mvcard',d.adc_ok?Number(d.mv).toFixed(0):'--');text('mode',d.mode);");
-  page += F("let used=Number(d.used_g),max=Number(d.max_g);text('used',used.toFixed(1)+' g');text('limit','Limit '+max.toFixed(0)+' g');");
-  page += F("text('sample',Number(d.sample_delivered_g).toFixed(1)+' g');text('sampletarget','Target '+Number(d.sample_g).toFixed(1)+' g');");
-  page += F("text('titrant',d.titrant);var rd=d.result_formula==='edta_hardness'?1:(d.result_formula==='manual_factor'?4:5);text('resultm',Number(d.result_value).toFixed(rd));text('resultunit',d.result_unit);");
-  page += F("text('bottle',d.bottle_g>=0?Number(d.bottle_g).toFixed(1)+' g':'-- g');");
-  page += F("html('network','<span>'+d.network+'</span><span>AP '+d.ap_ip+'</span><span>STA '+d.sta_ip+'</span><span>OTA '+(d.ota?'ON':'OFF')+'</span>');");
-  page += F("text('netdetail','AP '+d.ap_ip+' / STA '+d.sta_ip+' / OTA host k10-ph-titrator');");
-  page += F("let f=document.querySelector('.fill');if(f)f.style.width=Math.max(0,Math.min(100,used/max*100))+'%';");
-  page += F("text('titrantgps',Number(d.titrant_gps).toFixed(3));text('samplegps',Number(d.sample_gps).toFixed(3));");
-  page += F("recordCurve(d);");
-  page += F("}catch(e){}}setInterval(poll,2000);");
-  page += F("function activateTab(name){var p=document.getElementById('tab-'+name);if(!p)return;document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.tab===name)});document.querySelectorAll('.panel').forEach(function(x){x.classList.remove('active')});p.classList.add('active')}");
-  page += F("document.querySelectorAll('.tab').forEach(function(b){b.onclick=function(){activateTab(b.dataset.tab);location.hash=b.dataset.tab}});var initial=(location.hash||'#run').slice(1);activateTab(initial);");
-  page += F("['chartX','chartY'].forEach(function(id){var e=document.getElementById(id);if(e)e.onchange=drawCurve});var cv=document.getElementById('curveCanvas');if(cv)cv.onclick=chooseEqpAt;var dv=document.getElementById('derivCanvas');if(dv)dv.onclick=chooseEqpAt;var ea=document.getElementById('eqpAuto');if(ea)ea.onclick=function(){eqpManual=null;drawCurve()};var lp=document.getElementById('learnParams');if(lp)lp.onclick=suggestParams;var cc=document.getElementById('curveClear');if(cc)cc.onclick=function(){curve=[];curveStart=0;eqpManual=null;text('learnInfo','Suggestions wait for at least 4 dose-change points.');drawCurve()};var ec=document.getElementById('curveCsv');if(ec)ec.onclick=function(){exportCurve('csv')};var ej=document.getElementById('curveJson');if(ej)ej.onclick=function(){exportCurve('json')};drawCurve();");
-  page += F("var presets={");
-  appendMethodPresetJs(page, TitrationMethod::PhEndpoint, true);
-  appendMethodPresetJs(page, TitrationMethod::MvEndpoint, true);
-  appendMethodPresetJs(page, TitrationMethod::EdtaHardness, true);
-  appendMethodPresetJs(page, TitrationMethod::Manual, false);
-  page += F("};");
-  page += F("function setv(id,v){var e=document.getElementById(id);if(e)e.value=v}var ms=document.getElementById('methodSelect');if(ms)ms.addEventListener('change',function(){var p=presets[ms.value];if(!p)return;setv('endpointSelect',p.endpoint);setv('trendSelect',p.trend);setv('targetPhInput',p.target);setv('targetMvInput',p.target_mv);setv('maxInput',p.max);setv('sampleInput',p.sample);setv('titrantSelect',p.titrant);setv('titrantMInput',p.titrant_m);setv('resultFormulaSelect',p.result_formula);setv('blankInput',p.blank_g);setv('titrantDensityInput',p.titrant_density);setv('sampleDensityInput',p.sample_density);setv('manualFactorInput',p.manual_factor);setv('controlBandInput',p.control_band);setv('stableDeltaInput',p.stable_delta);setv('holdInput',p.hold_s);setv('minSettleInput',p.min_settle_s);setv('maxSettleInput',p.max_settle_s);setv('maxTimeInput',p.max_time_s)});");
-  page += F("var mf=document.getElementById('manualForm');if(mf)mf.addEventListener('submit',async function(e){e.preventDefault();var fd=new FormData(mf);var cmd=e.submitter&&e.submitter.name?e.submitter.value:fd.get('cmd');fd.set('cmd',cmd);fd.set('ajax','1');try{await fetch('/action?'+new URLSearchParams(fd).toString(),{cache:'no-store'});poll()}catch(err){}});");
-  page += F("</script></main></body></html>");
-  return page;
-}
-
-void redirectHome() {
-  server.sendHeader("Location", "/", true);
-  server.send(302, "text/plain", "");
-}
-
-void redirectHomeTab(const char *tab) {
-  String location = "/";
-  if (tab != nullptr && tab[0] != '\0') {
-    location += "#";
-    location += tab;
-  }
-  server.sendHeader("Location", location, true);
-  server.send(302, "text/plain", "");
+#include "web_ui_page.inc"
 }
 
 void handleRoot() {
   server.send(200, "text/html", htmlPage());
 }
 
+void handleChineseUiScript() {
+  sendChineseUiScript();
+}
+
+void sendApiError(int status, const char *code, const String &message) {
+  server.send(status, "application/json", String("{\"ok\":false,\"error\":\"") +
+      jsonEscape(code) + "\",\"message\":\"" + jsonEscape(message) + "\"}");
+}
+
+bool readSessionToken(char out[33]) {
+  String token = server.header("X-Session-Token");
+  if (token.length() != 32) return false;
+  memcpy(out, token.c_str(), 32); out[32] = '\0'; return true;
+}
+
+bool requireSession(uint8_t &slot, bool refreshAfterSuccess = false) {
+  (void)refreshAfterSuccess;
+  char token[33];
+  if (!authStorageReady || !readSessionToken(token)) {
+    sendApiError(401, "authentication_required", "Authentication required"); return false;
+  }
+  AuthResult result = authManager.validateSession(token, millis(), slot);
+  memset(token, 0, sizeof token);
+  if (result != AuthResult::Ok) {
+    sendApiError(401, result == AuthResult::Expired ? "session_expired" : "authentication_required",
+                 result == AuthResult::Expired ? "Session expired" : "Authentication required");
+    return false;
+  }
+  return true;
+}
+
+AdmissionContext admissionRunState(bool authenticated) {
+  AdmissionContext context = {authenticated, httpOtaSafetyLock, httpOtaInProgress,
+                              isActiveState(), state == RunState::Calibrating};
+  return context;
+}
+
+bool requireCommand(WebCommand command, uint8_t &sessionSlot) {
+  bool anonymousEmergency = command == WebCommand::EmergencyStop;
+  if (!anonymousEmergency && !requireSession(sessionSlot)) return false;
+  AdmissionResult result = admitWebCommand(command, admissionRunState(!anonymousEmergency));
+  if (result == AdmissionResult::Allowed) return true;
+  sendApiError(result == AdmissionResult::AuthenticationRequired ? 401 : 403,
+               result == AdmissionResult::OtaLocked ? "ota_locked" : "invalid_state", "Command rejected");
+  return false;
+}
+
+bool saveRecoveredCredential(void *context, const AuthCredential &credential) {
+  return static_cast<AuthStore *>(context)->saveAdministrator(credential);
+}
+
+void handleMethodNotAllowed() { sendApiError(405, "method_not_allowed", "POST required"); }
+void handlePanic() {
+  uint8_t sessionSlot;
+  if (!requireCommand(WebCommand::EmergencyStop, sessionSlot)) return;
+  pump.stop();
+  samplePump.stop();
+  dispatchRunCommand(RunCommand::EmergencyStop);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleLogin() {
+  AdmissionResult admission = admitWebCommand(WebCommand::Login, admissionRunState(false));
+  if (admission != AdmissionResult::Allowed) { sendApiError(403, "ota_locked", "Login unavailable"); return; }
+  if (!authStorageReady || !server.hasArg("password")) { sendApiError(401, "invalid_credentials", "Invalid credentials"); return; }
+  String password = server.arg("password"); char token[33] = {};
+  AuthResult result = authManager.login(password.c_str(), password.length(), millis(), token);
+  password = "";
+  if (result == AuthResult::RateLimited) { sendApiError(429, "rate_limited", "Try again later"); return; }
+  if (result != AuthResult::Ok) { sendApiError(401, "invalid_credentials", "Invalid credentials"); return; }
+  server.send(200, "application/json", String("{\"ok\":true,\"token\":\"") + token + "\"}");
+  memset(token, 0, sizeof token);
+}
+
+void handleLogout() {
+  uint8_t slot; if (!requireCommand(WebCommand::Logout, slot)) return;
+  char token[33]; if (!readSessionToken(token)) return;
+  authManager.logout(token); memset(token, 0, sizeof token);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleRecover() {
+  pump.stop();
+  samplePump.stop();
+  AdmissionResult admission = admitWebCommand(WebCommand::Recover, admissionRunState(false));
+  if (admission != AdmissionResult::Allowed) { sendApiError(403, "ota_locked", "Recovery unavailable"); return; }
+  if (!authStorageReady || !server.hasArg("factory_password") || !server.hasArg("new_password")) {
+    sendApiError(401, "recovery_failed", "Recovery failed"); return;
+  }
+  String factoryPassword = server.arg("factory_password"), newPassword = server.arg("new_password");
+  AuthResult result = authManager.recover(factoryPassword.c_str(), factoryPassword.length(),
+      newPassword.c_str(), newPassword.length(), millis(), saveRecoveredCredential, &authStore);
+  factoryPassword = ""; newPassword = "";
+  if (result == AuthResult::RateLimited) { sendApiError(429, "rate_limited", "Try again later"); return; }
+  if (result != AuthResult::Ok) { sendApiError(result == AuthResult::StorageError ? 500 : 401, "recovery_failed", "Recovery failed"); return; }
+  authManager.clearSessions();
+  resetRunData();
+  setState(RunState::SetupMode, "Recovered");
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+struct SettingsCandidate {
+  TitrationSettings settings;
+  PhCalibration calibration;
+  TitrationMethod method;
+  float titrantGps;
+  float sampleGps;
+  int titrantRunUs;
+  int sampleRunUs;
+  int titrantDosePercent;
+  uint16_t burstOnMs;
+  uint16_t burstOffMs;
+  float scaleFactor;
+  String wifiSsid;
+  String wifiPassword;
+};
+
+bool validateSettingsCandidate(const SettingsCandidate &candidate, String &error) {
+  if (absoluteFloat(candidate.calibration.highProbeMillivolts - candidate.calibration.lowProbeMillivolts) <= 0.01f ||
+      absoluteFloat(candidate.calibration.highAdsMillivolts - candidate.calibration.lowAdsMillivolts) <= 0.01f) {
+    error = "Bad calibration span"; return false;
+  }
+  return true;
+}
+
+void commitSettingsCandidate(const SettingsCandidate &candidate) {
+  settings = candidate.settings;
+  phCalibration = candidate.calibration;
+  currentMethod = candidate.method;
+  titrantPumpFlowRateGps = candidate.titrantGps;
+  samplePumpFlowRateGps = candidate.sampleGps;
+  titrantPumpRunUs = candidate.titrantRunUs;
+  samplePumpRunUs = candidate.sampleRunUs;
+  titrantDosePercent = candidate.titrantDosePercent;
+  titrantBurstOnMs = candidate.burstOnMs;
+  titrantBurstOffMs = candidate.burstOffMs;
+  scaleSensor.setCalibrationFactor(candidate.scaleFactor);
+  wifiSsid = candidate.wifiSsid;
+  wifiPassword = candidate.wifiPassword;
+  pump.setRunPulseUs(titrantPumpRunUs);
+  samplePump.setRunPulseUs(samplePumpRunUs);
+}
+
 void handleSet() {
+  uint8_t sessionSlot;
+  if (!requireCommand(WebCommand::SaveMethodSettings, sessionSlot)) return;
+
+  SettingsCandidate candidate = {settings, phCalibration, currentMethod,
+      titrantPumpFlowRateGps, samplePumpFlowRateGps, titrantPumpRunUs, samplePumpRunUs,
+      titrantDosePercent, titrantBurstOnMs, titrantBurstOffMs,
+      scaleSensor.calibrationFactor(), wifiSsid, wifiPassword};
+  TitrationSettings &settings = candidate.settings;
+  PhCalibration &phCalibration = candidate.calibration;
+  TitrationMethod &currentMethod = candidate.method;
+  float &titrantPumpFlowRateGps = candidate.titrantGps;
+  float &samplePumpFlowRateGps = candidate.sampleGps;
+  int &titrantPumpRunUs = candidate.titrantRunUs;
+  int &samplePumpRunUs = candidate.sampleRunUs;
+  int &titrantDosePercent = candidate.titrantDosePercent;
+  uint16_t &titrantBurstOnMs = candidate.burstOnMs;
+  uint16_t &titrantBurstOffMs = candidate.burstOffMs;
+  String &wifiSsid = candidate.wifiSsid;
+  String &wifiPassword = candidate.wifiPassword;
+
   bool wifiChanged = false;
   bool endpointChanged = false;
   bool methodRequested = false;
@@ -2299,22 +2059,29 @@ void handleSet() {
     samplePumpFlowRateGps = constrain(server.arg("sample_gps").toFloat(), 0.0f, 100.0f);
     calibrationChanged = true;
   }
-  if (server.hasArg("scale_factor")) {
-    scaleSensor.setCalibrationFactor(constrain(server.arg("scale_factor").toFloat(), 1.0f, 100000.0f));
+  if (server.hasArg("titrant_run_us")) {
+    titrantPumpRunUs = constrainPumpRunUs(server.arg("titrant_run_us").toInt());
     calibrationChanged = true;
   }
-  if (calibrationChanged) {
-    if (absoluteFloat(phCalibration.highProbeMillivolts - phCalibration.lowProbeMillivolts) > 0.01f &&
-        absoluteFloat(phCalibration.highAdsMillivolts - phCalibration.lowAdsMillivolts) > 0.01f) {
-      saveCalibration();
-      phFilter.reset();
-      phReady = false;
-    } else {
-      statusLine = "Bad calibration span";
-      displayDirty = true;
-      redirectHome();
-      return;
-    }
+  if (server.hasArg("sample_run_us")) {
+    samplePumpRunUs = constrainPumpRunUs(server.arg("sample_run_us").toInt());
+    calibrationChanged = true;
+  }
+  if (server.hasArg("titrant_dose_pct")) {
+    titrantDosePercent = constrainTitrantDosePercent(server.arg("titrant_dose_pct").toInt());
+    calibrationChanged = true;
+  }
+  if (server.hasArg("titrant_burst_on_ms")) {
+    titrantBurstOnMs = constrainTitrantBurstOnMs(server.arg("titrant_burst_on_ms").toInt());
+    calibrationChanged = true;
+  }
+  if (server.hasArg("titrant_burst_off_ms")) {
+    titrantBurstOffMs = constrainTitrantBurstOffMs(server.arg("titrant_burst_off_ms").toInt());
+    calibrationChanged = true;
+  }
+  if (server.hasArg("scale_factor")) {
+    candidate.scaleFactor = constrain(server.arg("scale_factor").toFloat(), 1.0f, 100000.0f);
+    calibrationChanged = true;
   }
 
   if (server.hasArg("ssid")) {
@@ -2328,35 +2095,49 @@ void handleSet() {
     }
 
     if (nextSsid != wifiSsid || nextPassword != wifiPassword) {
-      saveWifiSettings(nextSsid, nextPassword);
+      wifiSsid = nextSsid;
+      wifiPassword = nextPassword;
       wifiChanged = true;
     }
   }
 
   if (methodRequested && requestedMethod != currentMethod) {
     methodChanged = true;
-    selectMethod(requestedMethod, true);
+    currentMethod = requestedMethod;
+    applyTitrationMethodPreset(settings, currentMethod);
+    applyMethodAux(settings, loadMethodAux(currentMethod));
     endpointChanged = false;
   } else if (methodRequested && requestedMethod != TitrationMethod::Manual &&
              !methodFieldChanged && !methodMatchesPreset(requestedMethod)) {
     methodChanged = true;
-    selectMethod(requestedMethod, true);
+    currentMethod = requestedMethod;
+    applyTitrationMethodPreset(settings, currentMethod);
+    applyMethodAux(settings, loadMethodAux(currentMethod));
     endpointChanged = false;
   } else if (methodFieldChanged && currentMethod != TitrationMethod::Manual) {
     currentMethod = TitrationMethod::Manual;
-    saveSelectedMethod();
-  } else if (methodRequested) {
-    saveSelectedMethod();
   }
-  if (methodAuxChanged) {
-    saveMethodAux(currentMethod);
+  String validationError;
+  if (calibrationChanged && !validateSettingsCandidate(candidate, validationError)) {
+    sendApiError(422, "invalid_settings", validationError); return;
   }
-  if (endpointChanged) {
-    phDynamics.reset();
-    eqpTracker.reset();
+  commitSettingsCandidate(candidate);
+  if (methodChanged) {
+    phFilter.reset();
+    phReady = false; phSampleFresh = false;
+    resetRunData();
+    setState(RunState::SetupMode, String("Method ") + methodLabel(currentMethod));
   }
+  if (methodRequested || methodFieldChanged) saveSelectedMethod();
+  if (methodAuxChanged) saveMethodAux(currentMethod);
+  if (calibrationChanged) {
+    saveCalibration();
+    phFilter.reset(); phReady = false;
+  }
+  if (wifiChanged) saveWifiSettings(wifiSsid, wifiPassword);
   statusLine = wifiChanged ? "WiFi saved" : (calibrationChanged ? "Calibration saved" : (methodChanged ? "Method loaded" : "Settings saved"));
   displayDirty = true;
+  authManager.recordSuccessfulWrite(sessionSlot, millis());
   redirectHomeTab(calibrationChanged ? "cal" : "admin");
   if (wifiChanged) {
     pump.stop();
@@ -2368,33 +2149,77 @@ void handleSet() {
 void handleAction() {
   updatePumpTimeouts();
   String cmd = server.arg("cmd");
-  float manualSeconds = server.hasArg("sec") ? server.arg("sec").toFloat() : (server.arg("ms").toFloat() / 1000.0f);
-  manualSeconds = constrain(manualSeconds, 0.1f, 30.0f);
-  uint16_t manualMs = (uint16_t)(manualSeconds * 1000.0f + 0.5f);
-  int manualUs = server.hasArg("us") ? server.arg("us").toInt() : TITRANT_PUMP_RUN_US;
-  manualUs = constrain(manualUs, 500, 2500);
+  WebCommand command;
+  bool known = true;
+  if (cmd == "start") command = WebCommand::Start;
+  else if (cmd == "start_existing") command = WebCommand::StartExisting;
+  else if (cmd == "stop") command = WebCommand::Pause;
+  else if (cmd == "tare" || cmd == "scale_calibrate") command = WebCommand::Tare;
+  else if (cmd == "reset") command = WebCommand::Reset;
+  else if (cmd == "ready") command = WebCommand::EnterReady;
+  else if (cmd == "calibrate") command = WebCommand::CalibratePumps;
+  else if (cmd == "ph_signal_calibrate") command = WebCommand::ResetSignalFilter;
+  else if (cmd == "manual_titrant") command = WebCommand::ManualTitrant;
+  else if (cmd == "manual_sample") command = WebCommand::ManualSample;
+  else if (cmd.startsWith("manual_sweep") || cmd == "manual_capture_sweep") command = WebCommand::ManualSweep;
+  else if (cmd == "manual_stop") command = WebCommand::ManualStop;
+  else known = false;
+  if (!known) { sendApiError(400, "unknown_command", "Unknown command"); return; }
+  uint8_t sessionSlot = 0;
+  if (!requireCommand(command, sessionSlot)) return;
+  if (httpOtaSafetyLock) {
+    if (cmd == "reset" && !httpOtaInProgress && !httpOtaSucceeded) {
+      resetFromHttpOtaFailure();
+      authManager.recordSuccessfulWrite(sessionSlot, millis());
+    } else {
+      statusLine = httpOtaInProgress ? "OTA in progress" : "OTA failed: reset required";
+      displayDirty = true;
+    }
+    redirectHomeTab("run");
+    return;
+  }
+  uint16_t manualMs = 25;
+  if (server.hasArg("ms")) {
+    manualMs = (uint16_t)constrain(server.arg("ms").toInt(), 5, 30000);
+  } else if (server.hasArg("sec")) {
+    float manualSeconds = constrain(server.arg("sec").toFloat(), 0.005f, 30.0f);
+    manualMs = (uint16_t)(manualSeconds * 1000.0f + 0.5f);
+  }
+  uint16_t manualBurstOnMs = constrainTitrantBurstOnMs(server.hasArg("burst_on_ms") ? server.arg("burst_on_ms").toInt() : titrantBurstOnMs);
+  uint16_t manualBurstOffMs = constrainTitrantBurstOffMs(server.hasArg("burst_off_ms") ? server.arg("burst_off_ms").toInt() : titrantBurstOffMs);
+  int manualTitrantUs = titrantPumpRunUs;
+  int manualSampleUs = samplePumpRunUs;
+  if (server.hasArg("titrant_us")) {
+    manualTitrantUs = server.arg("titrant_us").toInt();
+  } else if (server.hasArg("us")) {
+    manualTitrantUs = server.arg("us").toInt();
+  }
+  if (server.hasArg("sample_us")) {
+    manualSampleUs = server.arg("sample_us").toInt();
+  } else if (server.hasArg("us")) {
+    manualSampleUs = server.arg("us").toInt();
+  }
+  manualTitrantUs = constrainPumpRunUs(manualTitrantUs);
+  manualSampleUs = constrainPumpRunUs(manualSampleUs);
   const char *returnTab = "run";
   if (cmd == "start") {
     if (state == RunState::Paused) {
-      resumeTitration();
+      dispatchRunCommand(RunCommand::Resume);
     } else {
-      startTitration();
+      dispatchRunCommand(RunCommand::StartNormal);
     }
   } else if (cmd == "start_existing") {
     if (state == RunState::Paused) {
-      resumeTitration();
+      dispatchRunCommand(RunCommand::Resume);
     } else {
-      startExistingSampleTitration();
+      dispatchRunCommand(RunCommand::StartExistingSample);
     }
   } else if (cmd == "stop") {
-    pauseTitration();
-  } else if (cmd == "panic") {
-    stopTitration("Emergency stop");
+    dispatchRunCommand(RunCommand::Pause);
   } else if (cmd == "tare") {
     tareScale();
   } else if (cmd == "reset") {
-    resetRunData();
-    setState(RunState::SetupMode, "Reset");
+    dispatchRunCommand(RunCommand::Reset);
   } else if (cmd == "ready") {
     resetRunData();
     setState(RunState::SetupReady, "Ready for calibration");
@@ -2420,7 +2245,6 @@ void handleAction() {
     returnTab = "cal";
     if (!isActiveState() && state != RunState::Calibrating) {
       phFilter.reset();
-      phDynamics.reset();
       phReady = false;
       phSampleFresh = false;
       statusLine = "pH/mV filter reset";
@@ -2431,30 +2255,66 @@ void handleAction() {
   } else if (cmd == "manual_titrant") {
     returnTab = "manual";
     if (!isActiveState() && state != RunState::Calibrating) {
+      stopManualSweep(false);
       samplePump.stop();
-      activePulseMs = manualMs;
-      pump.runForMsAtUs(manualMs, manualUs);
-      statusLine = String("Manual titrant ") + String(manualSeconds, 1) + "s @ " + String(manualUs) + "us";
+      pump.runForMsAtUsBurst(manualMs, manualTitrantUs, manualBurstOnMs, manualBurstOffMs);
+      statusLine = String("Manual titrant ") + String(manualMs) + "ms @ " + String(manualTitrantUs) + "us " + String(manualBurstOnMs) + "/" + String(manualBurstOffMs);
       displayDirty = true;
     }
   } else if (cmd == "manual_sample") {
     returnTab = "manual";
     if (!isActiveState() && state != RunState::Calibrating) {
+      stopManualSweep(false);
       pump.stop();
-      activePulseMs = 0;
-      samplePump.runForMs(manualMs);
-      statusLine = String("Manual sample ") + String(manualSeconds, 1) + "s";
+      samplePump.runForMsAtUsBurst(manualMs, manualSampleUs, manualBurstOnMs, manualBurstOffMs);
+      statusLine = String("Manual sample ") + String(manualMs) + "ms @ " + String(manualSampleUs) + "us " + String(manualBurstOnMs) + "/" + String(manualBurstOffMs);
+      displayDirty = true;
+    }
+  } else if (cmd == "manual_sweep_titrant") {
+    returnTab = "manual";
+    if (!isActiveState() && state != RunState::Calibrating) {
+      int startUs = server.hasArg("sweep_start_us") ? server.arg("sweep_start_us").toInt() : titrantPumpRunUs;
+      int endUs = server.hasArg("sweep_end_us") ? server.arg("sweep_end_us").toInt() : PUMP_MAX_RUN_US;
+      uint16_t sweepSeconds = (uint16_t)(server.hasArg("sweep_sec") ? server.arg("sweep_sec").toInt() : 20);
+      startManualSweep(true, startUs, endUs, sweepSeconds);
+    }
+  } else if (cmd == "manual_sweep_sample") {
+    returnTab = "manual";
+    if (!isActiveState() && state != RunState::Calibrating) {
+      int startUs = server.hasArg("sweep_start_us") ? server.arg("sweep_start_us").toInt() : samplePumpRunUs;
+      int endUs = server.hasArg("sweep_end_us") ? server.arg("sweep_end_us").toInt() : PUMP_MAX_RUN_US;
+      uint16_t sweepSeconds = (uint16_t)(server.hasArg("sweep_sec") ? server.arg("sweep_sec").toInt() : 20);
+      startManualSweep(false, startUs, endUs, sweepSeconds);
+    }
+  } else if (cmd == "manual_capture_sweep") {
+    returnTab = "manual";
+    if (manualSweepActive) {
+      int capturedUs = currentManualSweepUs();
+      if (manualSweepTitrant) {
+        titrantPumpRunUs = capturedUs;
+        pump.setRunPulseUs(titrantPumpRunUs);
+      } else {
+        samplePumpRunUs = capturedUs;
+        samplePump.setRunPulseUs(samplePumpRunUs);
+      }
+      saveCalibration();
+      stopManualSweep(true);
+      statusLine = String("Captured ") + (manualSweepTitrant ? "titrant " : "sample ") + String(capturedUs) + "us";
+      displayDirty = true;
+    } else {
+      statusLine = "No sweep active";
       displayDirty = true;
     }
   } else if (cmd == "manual_stop") {
     returnTab = "manual";
+    stopManualSweep(false);
     pump.stop();
     samplePump.stop();
-    activePulseMs = 0;
     statusLine = "Manual stop";
     displayDirty = true;
   }
   updatePumpTimeouts();
+  if (command != WebCommand::EmergencyStop) authManager.recordSuccessfulWrite(sessionSlot, millis());
   if (server.hasArg("ajax")) {
     String json = "{\"ok\":true,\"tab\":\"";
     json += returnTab;
@@ -2468,6 +2328,7 @@ void handleAction() {
 }
 
 void handleJson() {
+  RunTelemetry telemetry = runEngine.telemetry();
   String json = "{";
   json += "\"adc_ok\":" + String(lastPh.adcOk ? "true" : "false");
   json += ",\"ph_valid\":" + String(phReady ? "true" : "false");
@@ -2478,7 +2339,7 @@ void handleJson() {
   json += ",\"raw_bottle_g\":" + String(scaleReady ? lastScale.rawGrams : -1.0f, 1);
   json += ",\"used_g\":" + String(consumedGrams, 1);
   json += ",\"endpoint_used_g\":" + String(resultConsumedGrams(), 2);
-  json += ",\"predose_target_g\":" + String(stoichPredoseTargetGrams, 1);
+  json += ",\"predose_target_g\":" + String(telemetry.predoseTargetGrams, 2);
   json += ",\"predose_ratio\":" + String(STOICH_PREDOSE_RATIO, 2);
   json += ",\"sample_g\":" + String(settings.sampleGrams, 1);
   json += ",\"sample_delivered_g\":" + String(sampleDeliveredGrams, 1);
@@ -2495,11 +2356,11 @@ void handleJson() {
   json += ",\"method\":\"" + String(methodValue(currentMethod)) + "\"";
   json += ",\"method_label\":\"" + jsonEscape(methodLabel(currentMethod)) + "\"";
   json += ",\"auto_eqp\":" + String(autoEqpEnabled() ? "true" : "false");
-  json += ",\"eqp_reached\":" + String(eqpTracker.reached ? "true" : "false");
-  json += ",\"eqp_points\":" + String(eqpTracker.count);
-  json += ",\"eqp_used_g\":" + String(eqpTracker.bestUsedGrams, 2);
-  json += ",\"eqp_signal\":" + String(eqpTracker.bestSignal, 1);
-  json += ",\"eqp_slope\":" + String(eqpTracker.bestSlope, 1);
+  json += ",\"eqp_reached\":" + String(telemetry.eqpReached ? "true" : "false");
+  json += ",\"eqp_points\":" + String(telemetry.eqpPointCount);
+  json += ",\"eqp_used_g\":" + String(telemetry.eqpUsedGrams, 2);
+  json += ",\"eqp_signal\":" + String(telemetry.eqpSignal, settings.endpoint == ControlEndpoint::Millivolts ? 0 : 2);
+  json += ",\"eqp_slope\":" + String(telemetry.eqpSlope, settings.endpoint == ControlEndpoint::Millivolts ? 1 : 3);
   json += ",\"endpoint\":\"" + String(endpointText()) + "\"";
   json += ",\"target_mv\":" + String(settings.targetMillivolts, 0);
   json += ",\"target_ph\":" + String(settings.targetPh, 2);
@@ -2514,7 +2375,7 @@ void handleJson() {
   json += ",\"state\":\"" + stateLabel() + "\"";
   json += ",\"status\":\"" + jsonEscape(statusLine) + "\"";
   json += ",\"pump\":" + String(pump.isRunning() ? "true" : "false");
-  json += ",\"pump_pulse_ms\":" + String(pump.isRunning() ? activePulseMs : 0);
+  json += ",\"pump_pulse_ms\":" + String(pump.isRunning() ? displayedPulseMs : 0);
   json += ",\"sample_pump\":" + String(samplePump.isRunning() ? "true" : "false");
   json += ",\"filter_ready\":" + String(phFilter.ready() ? "true" : "false");
   json += ",\"sensor_fault\":" + String(sensorFault ? "true" : "false");
@@ -2525,8 +2386,18 @@ void handleJson() {
   json += ",\"sta_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false");
   json += ",\"wifi_ssid\":\"" + jsonEscape(wifiSsid) + "\"";
   json += ",\"ota\":" + String(otaReady ? "true" : "false");
+  json += ",\"ota_safety_lock\":" + String(httpOtaSafetyLock ? "true" : "false");
+  json += ",\"ota_in_progress\":" + String(httpOtaInProgress ? "true" : "false");
   json += ",\"titrant_gps\":" + String(titrantPumpFlowRateGps, 4);
   json += ",\"sample_gps\":" + String(samplePumpFlowRateGps, 4);
+  json += ",\"titrant_run_us\":" + String(titrantPumpRunUs);
+  json += ",\"sample_run_us\":" + String(samplePumpRunUs);
+  json += ",\"titrant_dose_pct\":" + String(titrantDosePercent);
+  json += ",\"titrant_burst_on_ms\":" + String(titrantBurstOnMs);
+  json += ",\"titrant_burst_off_ms\":" + String(titrantBurstOffMs);
+  json += ",\"manual_sweep\":" + String(manualSweepActive ? "true" : "false");
+  json += ",\"manual_sweep_pump\":\"" + String(manualSweepTitrant ? "titrant" : "sample") + "\"";
+  json += ",\"manual_sweep_us\":" + String(currentManualSweepUs());
   json += ",\"scale_factor\":" + String(scaleSensor.calibrationFactor(), 2);
   json += ",\"scale_filtered\":" + String(lastScale.filtered ? "true" : "false");
   json += ",\"scale_rejected\":" + String(lastScale.rejected ? "true" : "false");
@@ -2543,36 +2414,110 @@ void handleJson() {
   server.send(200, "application/json", json);
 }
 
+void enterHttpOtaSafety() {
+  httpOtaSafetyLock = true;
+  httpOtaInProgress = true;
+  httpOtaSucceeded = false;
+  stopManualSweep(false);
+  pump.stop();
+  samplePump.stop();
+  setState(RunState::Error, "OTA upload");
+}
+
+void failHttpOta(const String &detail) {
+  httpOtaSafetyLock = true;
+  httpOtaInProgress = false;
+  httpOtaSucceeded = false;
+  stopManualSweep(false);
+  pump.stop();
+  samplePump.stop();
+  setState(RunState::Error, detail.length() > 0 ? detail : "OTA failed");
+}
+
+void resetFromHttpOtaFailure() {
+  pump.stop();
+  samplePump.stop();
+  stopManualSweep(false);
+  resetRunData();
+  httpOtaInProgress = false;
+  httpOtaSafetyLock = false;
+  httpOtaSucceeded = false;
+  setState(RunState::SetupMode, "OTA reset");
+}
+
+void clearOtaRequestState() {
+  otaUploadStartSeen = false;
+  otaRequestAccepted = false;
+  otaSessionSlot = 0;
+  otaRejectedStatus = 0;
+}
+
 void handleOta() {
-  server.sendHeader("Connection", "close");
-  server.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
-  if (!Update.hasError()) {
-    scheduleRestart("OTA update done");
+  if (!otaUploadStartSeen || !otaRequestAccepted) {
+    int status = otaRejectedStatus ? otaRejectedStatus : 401;
+    sendApiError(status,
+                 status == 403 ? "ota_locked" : "authentication_required", "OTA rejected");
+    clearOtaRequestState();
+    return;
   }
+  bool success = httpOtaSucceeded && !httpOtaInProgress;
+  server.sendHeader("Connection", "close");
+  server.send(success ? 200 : 500, "text/plain", success ? "OK" : "FAIL");
+  if (success) {
+    authManager.recordSuccessfulWrite(otaSessionSlot, millis());
+    httpOtaSafetyLock = true;
+    scheduleRestart("OTA update done");
+  } else {
+    failHttpOta("OTA failed");
+  }
+  clearOtaRequestState();
 }
 
 void handleOtaUpload() {
   HTTPUpload &upload = server.upload();
   if (upload.status == UPLOAD_FILE_START) {
-    statusLine = "OTA upload";
-    displayDirty = true;
+    clearOtaRequestState();
+    otaUploadStartSeen = true;
+    otaRejectedStatus = 401;
+    char token[33]; uint8_t slot = 0;
+    if (authStorageReady && readSessionToken(token) &&
+        authManager.validateSession(token, millis(), slot) == AuthResult::Ok) {
+      AdmissionResult admission = admitWebCommand(WebCommand::OtaUpload, admissionRunState(true));
+      if (admission == AdmissionResult::Allowed) {
+        otaRequestAccepted = true; otaSessionSlot = slot;
+      } else otaRejectedStatus = 403;
+    }
+    memset(token, 0, sizeof token);
+    if (!otaRequestAccepted) return;
+    enterHttpOtaSafety();
     Serial.printf("OTA: %s\n", upload.filename.c_str());
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
       Update.printError(Serial);
+      failHttpOta("OTA start failed");
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (!otaRequestAccepted) return;
     if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
       Update.printError(Serial);
+      failHttpOta("OTA write failed");
     }
   } else if (upload.status == UPLOAD_FILE_END) {
+    if (!otaRequestAccepted) return;
+    httpOtaInProgress = false;
     if (Update.end(true)) {
-      Serial.printf("OTA Success: %u bytes\n", upload.totalSize);
+      httpOtaSucceeded = true;
       statusLine = "OTA done";
     } else {
       Update.printError(Serial);
-      statusLine = "OTA fail";
+      failHttpOta("OTA failed");
     }
     displayDirty = true;
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    if (otaRequestAccepted) {
+      Update.abort();
+      failHttpOta("OTA aborted");
+    }
+    clearOtaRequestState();
   }
 }
 
@@ -2601,10 +2546,19 @@ void startNetwork() {
   }
 
   server.on("/", handleRoot);
-  server.on("/set", handleSet);
-  server.on("/action", handleAction);
+  server.on("/i18n-zh.js", handleChineseUiScript);
+  server.on("/set", HTTP_POST, handleSet);
+  server.on("/set", HTTP_GET, handleMethodNotAllowed);
+  server.on("/action", HTTP_POST, handleAction);
+  server.on("/action", HTTP_GET, handleMethodNotAllowed);
+  server.on("/panic", HTTP_POST, handlePanic);
+  server.on("/login", HTTP_POST, handleLogin);
+  server.on("/logout", HTTP_POST, handleLogout);
+  server.on("/recover", HTTP_POST, handleRecover);
   server.on("/json", handleJson);
   server.on("/ota", HTTP_POST, handleOta, handleOtaUpload);
+  const char *headerKeys[] = {"X-Session-Token"};
+  server.collectHeaders(headerKeys, 1);
   server.begin();
   webReady = true;
 
@@ -2663,6 +2617,12 @@ void updateNetworkStatus() {
 
 void runCalibration() {
   updatePumpTimeouts();
+
+  if (httpOtaSafetyLock) {
+    pump.stop();
+    samplePump.stop();
+    return;
+  }
 
   static uint32_t calStartMs = 0;
   static int calPhase = 0;
@@ -2725,6 +2685,11 @@ void saveCalibration() {
   if (prefs.begin("cal", false)) {
     prefs.putFloat("titrant_gps", titrantPumpFlowRateGps);
     prefs.putFloat("sample_gps", samplePumpFlowRateGps);
+    prefs.putInt("titrant_us", titrantPumpRunUs);
+    prefs.putInt("sample_us", samplePumpRunUs);
+    prefs.putInt("dose_pct", titrantDosePercent);
+    prefs.putUShort("burst_on", titrantBurstOnMs);
+    prefs.putUShort("burst_off", titrantBurstOffMs);
     prefs.putFloat("scale_factor", scaleSensor.calibrationFactor());
     prefs.putFloat("low_ads_mv", phCalibration.lowAdsMillivolts);
     prefs.putFloat("low_probe_mv", phCalibration.lowProbeMillivolts);
@@ -2741,6 +2706,11 @@ void loadCalibration() {
   if (prefs.begin("cal", true)) {
     titrantPumpFlowRateGps = prefs.getFloat("titrant_gps", 0.0f);
     samplePumpFlowRateGps = prefs.getFloat("sample_gps", 0.0f);
+    titrantPumpRunUs = constrainPumpRunUs(prefs.getInt("titrant_us", TITRANT_PUMP_DEFAULT_RUN_US));
+    samplePumpRunUs = constrainPumpRunUs(prefs.getInt("sample_us", SAMPLE_PUMP_DEFAULT_RUN_US));
+    titrantDosePercent = constrainTitrantDosePercent(prefs.getInt("dose_pct", TITRANT_DOSE_DEFAULT_PERCENT));
+    titrantBurstOnMs = constrainTitrantBurstOnMs(prefs.getUShort("burst_on", TITRANT_BURST_ON_DEFAULT_MS));
+    titrantBurstOffMs = constrainTitrantBurstOffMs(prefs.getUShort("burst_off", TITRANT_BURST_OFF_DEFAULT_MS));
     scaleSensor.setCalibrationFactor(prefs.getFloat("scale_factor", scaleSensor.calibrationFactor()));
     phCalibration.lowAdsMillivolts = prefs.getFloat("low_ads_mv", phCalibration.lowAdsMillivolts);
     phCalibration.lowProbeMillivolts = prefs.getFloat("low_probe_mv", phCalibration.lowProbeMillivolts);
@@ -2806,6 +2776,12 @@ void drawDisplay() {
 
 void setup() {
   Serial.begin(115200);
+  AuthCredential factoryCredential, administratorCredential;
+  bool factoryLoaded = authStore.loadFactory(factoryCredential);
+  bool administratorLoaded = authStore.loadAdministrator(administratorCredential);
+  authStorageReady = factoryLoaded;
+  if (factoryLoaded) authManager.setFactoryCredential(factoryCredential);
+  if (administratorLoaded) authManager.setAdministratorCredential(administratorCredential);
   loadWifiSettings();
   startNetwork();
 
@@ -2815,13 +2791,15 @@ void setup() {
   k10.setScreenBackground(COLOR_BG);
   Wire.begin();
 
-  pump.begin(titrantPumpServo, TITRANT_PUMP_PIN, TITRANT_PUMP_RUN_US);
-  samplePump.begin(samplePumpServo, SAMPLE_PUMP_PIN, SAMPLE_PUMP_RUN_US);
+  pump.begin(titrantPumpServo, TITRANT_PUMP_PIN, titrantPumpRunUs);
+  samplePump.begin(samplePumpServo, SAMPLE_PUMP_PIN, samplePumpRunUs);
 
   phReady = phSensor.begin();
   scaleReady = scaleSensor.begin();
 
   loadCalibration();
+  pump.setRunPulseUs(titrantPumpRunUs);
+  samplePump.setRunPulseUs(samplePumpRunUs);
   loadSelectedMethod();
 
   if (!phReady || !scaleReady) {
@@ -2833,7 +2811,6 @@ void setup() {
     scaleFilter.reset(rawScale.ok ? rawScale.grams : 0.0f);
     lastScale = scaleFilter.apply(rawScale, false);
     scaleReady = lastScale.ok;
-    initialBottleWeight = lastScale.grams;
     setState(RunState::SetupMode, "Ready");
   }
 }
@@ -2863,3 +2840,5 @@ void loop() {
   }
   drawDisplay();
 }
+
+#endif

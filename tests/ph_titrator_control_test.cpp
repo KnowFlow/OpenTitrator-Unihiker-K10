@@ -28,6 +28,45 @@ void expectNear(float actual, float expected, float tolerance, const std::string
 }
 
 int main() {
+  // ---- rollover-safe time helpers ----
+  expectTrue(!elapsedAtLeast(1050U, 1000U, 100U), "elapsed duration not reached");
+  expectTrue(elapsedAtLeast(1100U, 1000U, 100U), "elapsed duration reached");
+  expectTrue(
+      elapsedAtLeast(25U, UINT32_MAX - 49U, 75U),
+      "elapsed duration survives millis rollover");
+
+  expectTrue(!deadlineReached(1000U, 0U), "zero deadline is inactive");
+  expectTrue(!deadlineReached(1099U, 1100U), "deadline not reached");
+  expectTrue(deadlineReached(1100U, 1100U), "deadline reached exactly");
+  expectTrue(deadlineReached(25U, 20U), "deadline survives millis rollover");
+
+  // ---- EndpointHoldTracker ----
+  {
+    EndpointHoldTracker hold;
+    expectTrue(!hold.update(true, true, 5, 1000U), "hold starts without completing");
+    expectTrue(!hold.update(false, true, 5, 7000U), "stale reading cannot complete hold");
+    expectTrue(!hold.update(true, false, 5, 7000U), "out-of-range reading resets hold");
+    expectTrue(!hold.active(), "hold inactive after leaving range");
+    expectTrue(!hold.update(true, true, 5, 8000U), "re-entry starts a new hold");
+    expectTrue(!hold.update(true, true, 5, 12999U), "new hold needs full duration");
+    expectTrue(hold.update(true, true, 5, 13000U), "continuous hold completes");
+  }
+
+  {
+    EndpointHoldTracker immediate;
+    expectTrue(immediate.update(true, true, 0, 42U), "zero-second hold completes immediately");
+  }
+
+  {
+    EndpointHoldTracker rollover;
+    expectTrue(
+        !rollover.update(true, true, 1, UINT32_MAX - 499U),
+        "rollover hold starts");
+    expectTrue(
+        rollover.update(true, true, 1, 500U),
+        "rollover hold completes");
+  }
+
   TitrationSettings settings;
   settings.mode = TitrationMode::AddBase;
   settings.targetPh = 7.00f;
@@ -127,9 +166,9 @@ int main() {
   // Steep slope -> micro pulse
   {
     dyn.reset();
-    dyn.add(6.50f, 0);
-    dyn.add(7.50f, 1000); // dpH/dt = 1.0 > 0.08
-    TitrationDecision d = decideAdaptiveDose(settings, 6.82f, 12.0f, dyn);
+    dyn.add(5.00f, 0);
+    dyn.add(5.20f, 1000); // dpH/dt = 0.2 > 0.08
+    TitrationDecision d = decideAdaptiveDose(settings, 5.20f, 12.0f, dyn);
     expectTrue(d.action == TitrationAction::Dose, "steep slope doses");
     expectEqual(d.pumpPulseMs, 25, "steep slope uses 25ms pulse");
     expectEqual(d.settleMs, 15000, "steep slope uses 15s settle");

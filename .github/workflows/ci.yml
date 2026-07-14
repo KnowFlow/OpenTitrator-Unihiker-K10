@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, "codex/ph-titrator"]
+  pull_request:
+    branches: [main, master, "codex/ph-titrator"]
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-platformio-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          trap 'rm -f ph_titrator/factory_auth.generated.h factory-label-ci.txt' EXIT
+          python scripts/generate_factory_auth.py --device-id CI-THROWAWAY \
+            --header ph_titrator/factory_auth.generated.h \
+            --label factory-label-ci.txt --iterations 120000
+          pio run --environment unihiker
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install compiler
+        run: sudo apt-get update && sudo apt-get install -y g++
+
+      - name: Build and run control logic tests
+        run: |
+          g++ -std=c++17 -Wall -Wextra -pedantic tests/ph_titrator_control_test.cpp -o control_test
+          ./control_test
+          g++ -std=c++17 -Wall -Wextra -pedantic tests/auth_core_test.cpp ph_titrator/auth_core.cpp -o auth_core_test
+          ./auth_core_test
+
+      - name: Run generator and static tests
+        shell: pwsh
+        run: |
+          python -m unittest tests.factory_auth_generator_test tests.ota_upload_script_test
+          ./tests/ota_upload_script_test.ps1
+          ./tests/web_auth_static_test.ps1
+          ./tests/sketch_safety_static_test.ps1
+
+  run-engine-tests:
+    name: RunEngine (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: g++
+            package: g++
+          - compiler: clang++
+            package: clang
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install compiler
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.package }}
+
+      - name: Build and run RunEngine tests
+        run: |
+          ${{ matrix.compiler }} -std=c++17 -Wall -Wextra -Werror -pedantic \
+            tests/run_engine_test.cpp ph_titrator/run_engine.cpp -o run_engine_test
+          ./run_engine_test
