@@ -96,6 +96,8 @@ The K10 creates a WiFi AP:
 
 Connect any phone or laptop to this AP and open the IP shown on screen (usually `http://192.168.4.1/`).
 
+On first provisioning, sign in with the unique factory password on the private device label and set the administrator password. Later visits use the administrator password. The language selector in the page header switches the complete UI between English and Chinese and remembers the choice in this browser.
+
 ---
 
 ## 5. Understanding the Screen
@@ -212,6 +214,8 @@ When the sample mass is reached:
 
 Once pH is stable, the state changes to **Running** and the titration loop begins.
 
+If the sample is already in the reactor, use **Start existing sample** in the Web Run tab. This skips `SampleFilling`, records the configured sample amount, and enters `FilterWarmup`. Verify that the configured sample mass matches the actual sample before using this command.
+
 ### 7.5 During Titration
 
 The controller repeatedly cycles through:
@@ -252,6 +256,8 @@ The titration stops automatically when any of the following occurs:
 
 Open the controller IP in a browser.
 
+Read-only monitoring and **Emergency stop** remain available without signing in. Sign in before starting, pausing, resetting, calibrating, manually running pumps, saving settings, or uploading firmware. Sessions expire after 30 minutes without a successful authenticated write; sign in again if a command returns `Unauthorized`.
+
 ### Live Panel
 - **Current pH / Current mV** — large display follows the active endpoint. It shows pH in pH mode and mV in mV mode.
 - The secondary line shows the other signal, for example pH when mV is the active endpoint.
@@ -275,9 +281,11 @@ Open the controller IP in a browser.
 - In **EDTA hardness**, the firmware also runs an EQP tracker. It records stable mV-vs-used-g points and stops after the mV slope peak is followed by two lower-slope segments.
 - Click a plotted point to manually correct the EQP candidate; click **Auto EQP** again to clear the manual correction.
 - **Suggest Params** estimates `Control band`, `Stable delta/s`, and `Min / Max settle s` from the current curve. It only displays suggestions and does not change settings automatically.
+- **Replay analysis** recalculates the live curve or an imported Run Record JSON. It merges duplicate delivered-mass points and uses centered local slopes to report an EQP candidate with `high`, `review`, or `insufficient` quality. It never changes the selected EQP, settings, pumps, or active run.
+- Finalized completed or aborted records are saved in this browser's IndexedDB. Use **Saved records** to load, export, print, or delete them. The browser keeps the newest 50; active drafts remain memory-only, site-data clearing removes the history, and no record is uploaded to K10.
 - **CSV** / **JSON** downloads the current curve data to the computer. K10 does not write curve data to flash.
 - CSV / JSON exports include the current EQP candidate, signal value, and maximum slope.
-- Refreshing the page clears the browser-memory curve, so export before refreshing if you need the record.
+- Refreshing clears an active in-memory curve, but finalized saved records remain available unless browser site data is cleared.
 
 ### Actions
 - **Start / Resume** — begins or resumes titration.
@@ -335,10 +343,12 @@ Endpoint hold uses fresh sensor readings. Entering the endpoint range stops dosi
 After compiling, upload the binary over the network:
 
 ```bash
-python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
+python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip DEVICE_IP --token SESSION_TOKEN
 ```
 
 The device restarts automatically when the upload completes.
+
+The CLI helper requires a current authenticated session token; the Web **Firmware update** form uses the current browser session automatically and is preferable for normal operation. Keep tokens out of shell history, logs, screenshots, and issue reports. The PowerShell equivalent is `.\scripts\ota_upload.ps1 -Bin firmware.bin -Ip DEVICE_IP -Token SESSION_TOKEN`.
 
 HTTP OTA stops and locks both pumps before flash writing. A successful update restarts into SetupMode and never resumes the interrupted run. After a failed or aborted upload, use the Web Reset control; hardware A/B buttons are not required for recovery.
 
@@ -422,6 +432,12 @@ The project uses a custom 16 MB partition table (`partitions.csv`) with dual OTA
 The first administrator signs in with the device-specific factory password on the private label and sets an administrator password. Logout invalidates the current session; otherwise it expires after 30 minutes without a successful authenticated write. Forgotten passwords can only be recovered in the Web interface using the factory label. Recovery stops both pumps, clears sessions and run data, and enters `SetupMode`.
 
 Control, settings, recovery, logout, and OTA are authenticated POST-only operations, so legacy GET-based integrations must migrate. Supply the logged-in session token to OTA with `--token` (Python) or `-Token` (PowerShell); it is sent as `X-Session-Token` and must never be logged.
+
+### USB administrator-password recovery
+
+If the factory recovery label is lost and Web recovery is unavailable, a technician with physical USB access can flash the `unihiker-auth-recovery` image to install a new administrator credential. The image only updates the `auth` Preferences namespace; it does not erase pump calibration, pH calibration, method settings, or WiFi, and it never initializes or drives a pump.
+
+After the recovery image prints `AUTH_RECOVERY:OK` over USB serial, immediately flash the normal `unihiker` firmware and log in with the new administrator password. Keep `recovery_admin.generated.h` local and ignored, delete it after recovery, and never put passwords, salts, derived hashes, or session tokens in Git, serial logs, or issue reports.
 
 ### Manufacturing and network security
 

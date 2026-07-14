@@ -1,6 +1,6 @@
 # Unihiker K10 pH Titrator
 
-[中文](README_CN.md) · [User Manual](docs/MANUAL.md) · [使用说明书](docs/MANUAL_CN.md) · [Roadmap](docs/ROADMAP_CN.md)
+[中文](README_CN.md) · [User Manual](docs/MANUAL.md) · [使用说明书](docs/MANUAL_CN.md) · [Roadmap](docs/ROADMAP.md) · [路线图](docs/ROADMAP_CN.md)
 
 A standalone pH titration controller for the **UNIHIKER K10** (ESP32-S3). It automates acid–base titration with an adaptive pure-pulse dosing strategy, dual peristaltic pumps, a pH probe with ADS1115 ADC, and an I2C electronic scale.
 
@@ -41,9 +41,10 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           Scale (0x64)
 - Pump timing overflow protection, watchdog/safety-stop paths, endpoint hold behavior, calibration validity checks, and EQP/curve-replay coverage were added.
 - Browser-side run records support final-record persistence (IndexedDB), replay analysis, printable reports, and CSV/JSON export; records never write back to the device automatically.
 - The web UI now has an English/Chinese selector. Chinese text is loaded through a separate `/i18n-zh.js` resource so the primary controller page stays within the K10's safe HTML-memory budget.
-- The current firmware was compiled and installed through authenticated HTTP OTA. Static authentication/safety tests and browser curve/record tests passed before deployment.
+- The English/Chinese UI coverage, including runtime messages and saved-record controls, is complete. The selected language is retained in the browser.
+- The current firmware has been compiled and installed through authenticated HTTP OTA. Automated authentication, safety, engine, curve-replay, record-persistence, and bilingual-UI checks cover the current implementation.
 
-Known follow-up: Chinese coverage is being completed for every explanatory paragraph and runtime-composed status message outside the Run tab. The controller remains usable while this wording work continues.
+Remaining validation is primarily physical: tune EDTA automatic-EQP thresholds against real hardness samples and complete labelled-device acceptance checks before treating a build as production-ready.
 
 ### Web Screenshots
 
@@ -98,7 +99,7 @@ The web **Calibration** tab separates pump flow, scale, pH/mV sensor, and titran
 
 ## ToDo / Roadmap
 
-The project is evolving from a pH titrator into a general potentiometric titrator. Detailed tasks are tracked in [docs/ROADMAP_CN.md](docs/ROADMAP_CN.md). Current order:
+The project is evolving from a pH titrator into a general potentiometric titrator. See the [English roadmap](docs/ROADMAP.md) or [Chinese roadmap](docs/ROADMAP_CN.md). Current priorities:
 
 - [x] Method presets for pH, mV, EDTA hardness, and manual methods.
 - [x] Parameterized EP endpoint control: control band, hold time, stability threshold, and max time.
@@ -107,8 +108,12 @@ The project is evolving from a pH titrator into a general potentiometric titrato
 - [x] Result calculation for acid/base concentration, EDTA hardness, and manual factors.
 - [x] Method-level blank and auxiliary values: store blank, manual molarity, density, and manual factor per Method.
 - [x] EDTA hardness method refinement: use mV curve slope to stop at an automatic equivalence point instead of a fixed mV target.
+- [x] Browser run records: finalized-run IndexedDB persistence, replay analysis, printable reports, and a 50-record retention limit.
+- [x] Authenticated POST control, factory recovery, USB administrator recovery, and bilingual Web UI.
+- [ ] Validate and tune automatic EDTA EQP behavior with real hardness samples.
+- [ ] Complete labelled-device provisioning and onsite safety/acceptance tests for each production unit.
 - [ ] Calcium/magnesium two-step hardness workflow with pH-condition guidance.
-- [ ] Advanced features: method workflow, sample series, and reports.
+- [ ] Advanced features: method workflow editor, sample series, report templates, and multi-run comparison.
 
 ---
 
@@ -129,7 +134,7 @@ arduino-cli upload -p COM4 --fqbn UNIHIKER:esp32:k10 ./ph_titrator
 ### 3. Upload (HTTP OTA)
 
 ```bash
-python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
+python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip DEVICE_IP --token SESSION_TOKEN
 ```
 
 HTTP OTA stops and locks both pumps before flash writing. A successful update restarts into SetupMode and never resumes the interrupted run. After a failed or aborted upload, use the Web Reset control; hardware A/B buttons are not required for recovery.
@@ -187,7 +192,7 @@ Every active-run entry point uses the same command mapping:
 
 Resume always re-enters `FilterWarmup`; the display tells the operator `正在重新稳定信号` while the signal is re-stabilized. `requestedSettleMs` is display/diagnostic metadata only. It cannot advance lifecycle transitions; only engine time and input sensor facts can do that.
 
-On-device deployment is deferred. The labelled-device Task 7 in [the Web/auth command-security plan](docs/superpowers/plans/2026-07-10-web-auth-command-security.md) must be completed onsite by the onsite operator before device installation or smoke verification. This phase does not claim deployment.
+Automated verification and authenticated OTA deployment have been completed for the current development device. Production readiness is still per-device: provision the unique factory credential and label, then complete onsite pump-stop, login/recovery, sensor, and representative-run acceptance checks.
 
 ---
 
@@ -195,18 +200,19 @@ On-device deployment is deferred. The labelled-device Task 7 in [the Web/auth co
 
 ```
 ph_titrator/
-├── ph_titrator.ino      # Main sketch (state machine, web UI, display)
-├── control_logic.h      # Titration math, filters, adaptive dose logic
+├── ph_titrator.ino      # Hardware, sensors, display, Web routes, and adapters
+├── run_engine.*         # Testable active-run lifecycle
+├── control_logic.h      # Titration math, filters, and adaptive dose logic
+├── auth_*               # Authentication, persistence, crypto, and USB recovery
+├── web_ui_*             # Web shell, page, script, escaping, and translations
 └── partitions.csv       # 16 MB OTA partition table
 
-tests/
-├── ph_titrator_control_test.cpp         # Native C++ unit tests
-└── ph_titrator_control_test/
-    └── ph_titrator_control_test.ino     # Arduino-hosted unit tests
+tests/                   # Native, Python, PowerShell, and browser-JS checks
 
 scripts/
-├── ota_upload.py        # HTTP OTA helper
-└── ota_upload.ps1       # PowerShell OTA helper
+├── ota_upload.*         # Authenticated HTTP OTA helpers
+├── generate_factory_auth.py
+└── generate_recovery_admin.py
 ```
 
 ---
