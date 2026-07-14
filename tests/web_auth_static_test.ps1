@@ -18,6 +18,13 @@ $guidePanelIndex = $sketch.IndexOf("<section id='tab-guide'")
 if ($authPanelIndex -le $guidePanelIndex) { throw 'FAIL: authorization panel must appear after every tab panel' }
 Need "id='loginButton' type='button'" 'login must use an explicit non-submit button'
 Need "id='recoveryButton'[^>]*type='button'" 'recovery must use an explicit non-submit button'
+Need "id='replayRecordInput' type='file'" 'replay needs local JSON import'
+Need "id='replayAnalysisButton' type='button'" 'replay needs explicit invocation'
+Need "function analyzeReplay\(points\)" 'replay analyzer must be a pure point-array function'
+Need "quality:'insufficient'" 'replay must represent insufficient data explicitly'
+$replaySource = [regex]::Match($sketch, 'function analyzeReplay\(points\)([\s\S]*?)function replayText').Groups[1].Value
+if (-not $replaySource) { throw 'FAIL: replay analyzer must end before replayText' }
+if ($replaySource -match 'apiPost\(') { throw 'FAIL: replay must never control the device' }
 Need "addEventListener\('keydown'.*?e\.key==='Enter'" 'authentication Enter handling must be explicit JavaScript'
 Need 'function apiPost\(path,form,allowAnonymous\)' 'browser mutations need one POST seam'
 Need "fetch\(path,\{method:'POST',headers,body:new URLSearchParams\(form\)\}\)" 'apiPost must form-encode POST bodies'

@@ -275,6 +275,7 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 - 在 **EDTA hardness** 方法中，固件端也会运行 EQP 追踪器：记录稳定后的 mV-用量点，当 mV 斜率峰值后连续两段回落时自动停止。
 - 点击曲线上的某个点可手动修正 EQP；再次点击 **Auto EQP** 会清除手动修正并恢复自动候选点。
 - **Suggest Params** 根据当前曲线估算 `Control band`、`Stable delta/s` 和 `Min / Max settle s` 的建议值；它只显示建议，不会自动修改设置。
+- **Replay analysis** 可复算当前曲线，或导入此前导出的 Run Record JSON。导入文件仅在当前浏览器内存中读取，不会上传到设备；回放会合并重复加液量、使用三点局部斜率给出 EQP 候选及 `high`、`review` 或 `insufficient` 质量提示。它只用于复核，不会改变已选 EQP、参数、泵或正在进行的实验。
 - **CSV** / **JSON** 将当前曲线数据下载到电脑，K10 不会把曲线写入 flash。
 - CSV / JSON 导出会包含当前 EQP 候选点、信号值和最大斜率。
 - 刷新网页会清空浏览器内存中的曲线数据；需要保留实验记录时请先导出。
