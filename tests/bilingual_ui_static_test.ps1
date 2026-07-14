@@ -23,5 +23,6 @@ Need "saved records in this browser" 'dynamic saved-record status must be transl
 Need "EQP 至少需要 3 个加液变化点" 'dynamic EQP guidance must be translated'
 Need "(?s)networkBar.*@media\(max-width:720px\)" 'mobile header layout must be optimized'
 Need "setupLanguage\(\);if\(sessionToken\(\)\)" 'language setup must run during page startup'
+Need "https://github\.com/KnowFlow/OpenTitrator-Unihiker-K10" 'source link must target the standalone K10 repository'
 
 Write-Output 'Bilingual UI static tests passed'
