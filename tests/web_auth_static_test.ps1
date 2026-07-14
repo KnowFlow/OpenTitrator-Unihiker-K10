@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
-$sketch = Get-Content -Raw (Join-Path $PSScriptRoot '..\ph_titrator\ph_titrator.ino')
+$sketch = (Get-Content -Raw (Join-Path $PSScriptRoot '..\ph_titrator\ph_titrator.ino')) +
+          (Get-Content -Raw (Join-Path $PSScriptRoot '..\ph_titrator\web_ui_page.inc'))
 function Need([string]$p,[string]$m) { if ($sketch -notmatch $p) { throw "FAIL: $m" } }
 function Reject([string]$p,[string]$m) { if ($sketch -match $p) { throw "FAIL: $m" } }
 Reject "href='/action\?" 'browser actions must not use GET links'

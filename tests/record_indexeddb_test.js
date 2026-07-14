@@ -2,7 +2,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const sketch = fs.readFileSync('ph_titrator/ph_titrator.ino', 'utf8');
+const sketch = fs.readFileSync('ph_titrator/ph_titrator.ino', 'utf8') +
+  fs.readFileSync('ph_titrator/web_ui_page.inc', 'utf8');
 const match = sketch.match(/function retainSavedRecords\(records\)([\s\S]*?)<\/script>/);
 assert.ok(match, 'embedded retention helper must be present');
 

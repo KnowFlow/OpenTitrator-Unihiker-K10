@@ -1,7 +1,8 @@
 $ErrorActionPreference = 'Stop'
 
 $sketchPath = Join-Path $PSScriptRoot '..\ph_titrator\ph_titrator.ino'
-$sketch = Get-Content -Raw $sketchPath
+$sketch = (Get-Content -Raw $sketchPath) +
+          (Get-Content -Raw (Join-Path $PSScriptRoot '..\ph_titrator\web_ui_page.inc'))
 
 function Assert-Match([string]$Pattern, [string]$Message) {
   if ($sketch -notmatch $Pattern) {
