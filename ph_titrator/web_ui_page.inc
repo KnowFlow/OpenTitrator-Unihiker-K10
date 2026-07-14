@@ -3,7 +3,7 @@
   int usedPercent = (int)constrain((consumedGrams / settings.maxConsumedGrams) * 100.0f, 0.0f, 100.0f);
   appendWebUiDocumentOpen(page);
 
-  page += F("<div class='top'><div><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>Potentiometric Titrator</div></div><div class='row topTools'><label class='mini language' for='languageSelect'>Language<select id='languageSelect'><option value='en'>English</option><option value='zh'>中文</option></select></label><div id='network' class='pill'>");
+  page += F("<div class='top'><div class='identity'><div class='brand'>K10 LAB CONTROLLER</div><div class='title'>Potentiometric Titrator</div></div><label class='mini language' for='languageSelect'>Language<select id='languageSelect'><option value='en'>English</option><option value='zh'>中文</option></select></label></div><div id='network' class='pill networkBar'>");
   page += F("<span>");
   page += htmlEscape(networkLabel);
   page += F("</span><span>AP ");
@@ -11,7 +11,7 @@
   page += F("</span><span>STA ");
   page += htmlEscape(staIpAddress);
   page += otaReady ? F("</span><span>OTA ON</span>") : F("</span><span>OTA OFF</span>");
-  page += F("</div></div></div>");
+  page += F("</div>");
 
   page += F("<section class='hero'><div><div id='primarylabel' class='k'>Current ");
   page += endpointText();
