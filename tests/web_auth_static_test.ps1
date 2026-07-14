@@ -22,6 +22,11 @@ Need "id='replayRecordInput' type='file'" 'replay needs local JSON import'
 Need "id='replayAnalysisButton' type='button'" 'replay needs explicit invocation'
 Need "function analyzeReplay\(points\)" 'replay analyzer must be a pure point-array function'
 Need "quality:'insufficient'" 'replay must represent insufficient data explicitly'
+Need "id='savedRecordSelect'" 'record history needs a local selector'
+Need "id='loadSavedRecord' type='button'" 'record history needs explicit load'
+Need "id='deleteSavedRecord' type='button'" 'record history needs explicit delete'
+Need "indexedDB\.open\('k10-titration-records',1\)" 'record history must use a local IndexedDB database'
+Need "function saveFinalRecord\(record\)" 'only finalized records may enter local storage'
 $replaySource = [regex]::Match($sketch, 'function analyzeReplay\(points\)([\s\S]*?)function replayText').Groups[1].Value
 if (-not $replaySource) { throw 'FAIL: replay analyzer must end before replayText' }
 if ($replaySource -match 'apiPost\(') { throw 'FAIL: replay must never control the device' }

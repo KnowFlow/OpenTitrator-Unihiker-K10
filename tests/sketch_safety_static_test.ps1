@@ -52,7 +52,7 @@ Assert-Match 'function recordPoint\(\)\{var p=recordCopy\(curve\[curve\.length-1
 Assert-Match 'runRecord\.points=d\.adc_ok&&curve\.length\?\[recordPoint\(\)\]:\[\]' 'first active telemetry starts empty or with its normalized current curve point'
 Assert-Match 'else if\(runRecord&&runRecord\.startedAt&&!runRecord\.final&&d\.adc_ok&&curve\.length\)\{runRecord\.points\.push\(recordPoint\(\)\)\}' 'later telemetry appends normalized copies only while the record is not finalized'
 Assert-Match 'function recordDeviceSnapshot\(d\)\{return\{network:d\.network,ip:d\.ip,ap_ip:d\.ap_ip,sta_ip:d\.sta_ip,sta_connected:d\.sta_connected,ota:d\.ota,ota_safety_lock:d\.ota_safety_lock,status:d\.status,' 'device snapshots retain firmware-independent network and status facts'
-$recordControl = [regex]::Match($sketch, 'var runRecord=null;[\s\S]*?(?=page \+= F\("async function poll)').Value
+$recordControl = [regex]::Match($sketch, 'var runRecord=null(?:,recordDb=null)?;[\s\S]*?(?=page \+= F\("async function poll)').Value
 if (-not $recordControl) { throw 'FAIL: could not inspect browser record control path' }
 if ($recordControl -match '/action|/set|/ota|apiPost') { throw 'FAIL: record control path must not control device' }
 Assert-Match 'recordCurve\(d\);[\s\S]*?observeRunRecord\(d\);' 'record observer runs after curve recorder'
