@@ -31,7 +31,6 @@ AuthManager authManager(authCrypto);
 bool authStorageReady = false;
 bool otaUploadStartSeen = false;
 bool otaRequestAccepted = false;
-uint8_t otaSessionSlot = 0;
 int otaRejectedStatus = 0;
 
 const uint8_t SCREEN_DIR = 2;
@@ -2448,15 +2447,15 @@ void resetFromHttpOtaFailure() {
 void clearOtaRequestState() {
   otaUploadStartSeen = false;
   otaRequestAccepted = false;
-  otaSessionSlot = 0;
   otaRejectedStatus = 0;
 }
 
 void handleOta() {
   if (!otaUploadStartSeen || !otaRequestAccepted) {
     int status = otaRejectedStatus ? otaRejectedStatus : 401;
-    sendApiError(status,
-                 status == 403 ? "ota_locked" : "authentication_required", "OTA rejected");
+    sendApiError(status, status == 403 ? "ota_locked" :
+                         status == 429 ? "rate_limited" : "invalid_credentials",
+                 status == 429 ? "Try again later" : "OTA rejected");
     clearOtaRequestState();
     return;
   }
@@ -2464,7 +2463,6 @@ void handleOta() {
   server.sendHeader("Connection", "close");
   server.send(success ? 200 : 500, "text/plain", success ? "OK" : "FAIL");
   if (success) {
-    authManager.recordSuccessfulWrite(otaSessionSlot, millis());
     httpOtaSafetyLock = true;
     scheduleRestart("OTA update done");
   } else {
@@ -2479,15 +2477,17 @@ void handleOtaUpload() {
     clearOtaRequestState();
     otaUploadStartSeen = true;
     otaRejectedStatus = 401;
-    char token[33]; uint8_t slot = 0;
-    if (authStorageReady && readSessionToken(token) &&
-        authManager.validateSession(token, millis(), slot) == AuthResult::Ok) {
+    String password = server.header("X-OTA-Password");
+    AuthResult authentication = authStorageReady
+        ? authManager.authenticateAdministrator(password.c_str(), password.length(), millis())
+        : AuthResult::Required;
+    password = "";
+    if (authentication == AuthResult::Ok) {
       AdmissionResult admission = admitWebCommand(WebCommand::OtaUpload, admissionRunState(true));
       if (admission == AdmissionResult::Allowed) {
-        otaRequestAccepted = true; otaSessionSlot = slot;
+        otaRequestAccepted = true;
       } else otaRejectedStatus = 403;
-    }
-    memset(token, 0, sizeof token);
+    } else if (authentication == AuthResult::RateLimited) otaRejectedStatus = 429;
     if (!otaRequestAccepted) return;
     enterHttpOtaSafety();
     Serial.printf("OTA: %s\n", upload.filename.c_str());
@@ -2557,8 +2557,8 @@ void startNetwork() {
   server.on("/recover", HTTP_POST, handleRecover);
   server.on("/json", handleJson);
   server.on("/ota", HTTP_POST, handleOta, handleOtaUpload);
-  const char *headerKeys[] = {"X-Session-Token"};
-  server.collectHeaders(headerKeys, 1);
+  const char *headerKeys[] = {"X-Session-Token", "X-OTA-Password"};
+  server.collectHeaders(headerKeys, 2);
   server.begin();
   webReady = true;
 

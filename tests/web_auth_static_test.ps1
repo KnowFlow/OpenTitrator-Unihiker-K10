@@ -44,6 +44,8 @@ Need 'TextEncoder\(\).*?\.encode\(.*?\)\.length|new TextEncoder\(\)\.encode\(.*?
 Need "apiPost\('/panic',\{\},true\)" 'emergency stop UI must use the dedicated anonymous endpoint'
 Reject 'data-cmd=''panic''|cmd == "panic"' 'panic must never map through the general action handler'
 Need "fetch\('/ota',\{method:'POST',headers:headers,body:fd\}\)" 'OTA must POST FormData with token headers'
+Need "id='otaPassword'[^>]*type='password'" 'OTA form must request the administrator password'
+Need "headers\['X-OTA-Password'\]=password" 'OTA browser upload must send the administrator password header'
 Reject "fetch\('/ota'[\s\S]{0,200}Content-Type" 'OTA must not set Content-Type manually'
 Need "fetch\('/ota'[\s\S]*?if\(response\.status===429\)throw new Error\('Too many attempts\. Try again later\.'\)[\s\S]*?if\(!response\.ok\)" 'OTA must replace server 429 detail before general server errors'
 Need 'server\.on\("/action",\s*HTTP_POST,\s*handleAction\)' '/action must be POST'
@@ -53,7 +55,7 @@ Need 'server\.on\("/set",\s*HTTP_GET,\s*handleMethodNotAllowed\)' 'GET /set must
 foreach ($route in 'login','logout','recover') { Need ('server\.on\("/' + $route + '",\s*HTTP_POST') "/$route must be POST-only" }
 Need 'void handleSet\(\) \{\s*uint8_t sessionSlot;\s*if \(!requireCommand\(WebCommand::SaveMethodSettings, sessionSlot\)\)' '/set must authenticate/admit before mutation'
 Need 'void handleAction\(\) \{[\s\S]*?String cmd = server\.arg\("cmd"\);[\s\S]*?requireCommand\(' '/action must parse then authenticate/admit'
-Need 'UPLOAD_FILE_START[\s\S]*?validateSession[\s\S]*?admitWebCommand\(WebCommand::OtaUpload[\s\S]*?enterHttpOtaSafety\(\)[\s\S]*?Update\.begin' 'OTA authentication/admission must precede safety and Update.begin'
+Need 'UPLOAD_FILE_START[\s\S]*?authenticateAdministrator[\s\S]*?admitWebCommand\(WebCommand::OtaUpload[\s\S]*?enterHttpOtaSafety\(\)[\s\S]*?Update\.begin' 'OTA password authentication/admission must precede safety and Update.begin'
 Need 'void handleRecover\(\) \{\s*pump\.stop\(\);\s*samplePump\.stop\(\);[\s\S]*?authManager\.recover[\s\S]*?resetRunData\(\);[\s\S]*?RunState::SetupMode' 'recovery ordering is unsafe'
 Need 'void handlePanic\(\) \{\s*uint8_t sessionSlot;\s*if \(!requireCommand\(WebCommand::EmergencyStop, sessionSlot\)\) return;\s*pump\.stop\(\);\s*samplePump\.stop\(\);' 'anonymous panic must pass centralized emergency admission before stop-only action'
 Need 'bool otaUploadStartSeen = false;' 'OTA lifecycle must track a current start event'

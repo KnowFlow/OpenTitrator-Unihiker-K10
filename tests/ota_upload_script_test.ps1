@@ -4,11 +4,11 @@ $Firmware = New-TemporaryFile
 try {
     [IO.File]::WriteAllBytes($Firmware, [byte[]](0, 1, 2, 255, 65, 66))
     $missing = & pwsh -NoProfile -File $Uploader -Bin $Firmware 2>&1 | Out-String
-    if ($LASTEXITCODE -eq 0 -or $missing -notmatch 'Token') { throw 'FAIL: PowerShell uploader accepts a missing token' }
+    if ($LASTEXITCODE -eq 0 -or $missing -notmatch 'Password') { throw 'FAIL: PowerShell uploader accepts a missing password' }
 
     $transport = {
       param($request)
-      if (($request.Headers.GetValues('X-Session-Token') | Select-Object -First 1) -ne 'secret-token') { throw 'missing header' }
+      if (($request.Headers.GetValues('X-OTA-Password') | Select-Object -First 1) -ne 'secret-password') { throw 'missing header' }
       $contentType = $request.Content.Headers.ContentType.ToString()
       if ($contentType -notmatch '^multipart/form-data; boundary="?([^";]+)') { throw 'not multipart' }
       $boundary = $Matches[1]
@@ -26,12 +26,12 @@ try {
       'OK'
     }
     $global:LASTEXITCODE = 0
-    $success = & $Uploader -Bin $Firmware -Ip '192.0.2.1' -Token 'secret-token' -Transport $transport 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or $success -match 'secret-token') { throw 'FAIL: multipart success path failed or printed token' }
+    $success = & $Uploader -Bin $Firmware -Ip '192.0.2.1' -Password 'secret-password' -Transport $transport 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $success -match 'secret-password') { throw 'FAIL: multipart success path failed or printed password' }
 
     $global:LASTEXITCODE = 0
-    $failure = & $Uploader -Bin $Firmware -Ip '192.0.2.1' -Token 'secret-token' -Transport { throw 'transport secret-token' } 2>&1 | Out-String
-    if ($LASTEXITCODE -eq 0 -or $failure -match 'secret-token') { throw 'FAIL: error path succeeded or printed token' }
+    $failure = & $Uploader -Bin $Firmware -Ip '192.0.2.1' -Password 'secret-password' -Transport { throw 'transport secret-password' } 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -or $failure -match 'secret-password') { throw 'FAIL: error path succeeded or printed password' }
     Write-Host 'All PowerShell OTA uploader behavioral tests passed'
 } finally {
     Remove-Item -LiteralPath $Firmware -Force -ErrorAction SilentlyContinue

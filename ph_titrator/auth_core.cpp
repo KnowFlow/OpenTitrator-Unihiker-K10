@@ -66,10 +66,11 @@ uint32_t AuthManager::nextSerial() {
   return serial_;
 }
 
-AuthResult AuthManager::login(const char *password, size_t bytes, uint32_t now,
-                              char tokenHex[33]) {
+AuthResult AuthManager::authenticateAdministrator(const char *password,
+                                                  size_t bytes,
+                                                  uint32_t now) {
   if (!administrator_.valid) return AuthResult::Required;
-  if (tokenHex == nullptr || !validAdministratorPassword(password, bytes))
+  if (!validAdministratorPassword(password, bytes))
     return AuthResult::InvalidPassword;
   if (loginLocked_) {
     if (static_cast<uint32_t>(now - loginLockedAt_) < LoginLockMs)
@@ -87,6 +88,14 @@ AuthResult AuthManager::login(const char *password, size_t bytes, uint32_t now,
     return AuthResult::Failed;
   }
   loginFailures_ = 0;
+  return AuthResult::Ok;
+}
+
+AuthResult AuthManager::login(const char *password, size_t bytes, uint32_t now,
+                              char tokenHex[33]) {
+  if (tokenHex == nullptr) return AuthResult::InvalidPassword;
+  AuthResult authentication = authenticateAdministrator(password, bytes, now);
+  if (authentication != AuthResult::Ok) return authentication;
   uint8_t selected = MaxSessions;
   for (uint8_t i = 0; i < MaxSessions; ++i)
     if (!sessions_[i].active) { selected = i; break; }

@@ -16,11 +16,11 @@ Assert-Match 'void handleButton\(ButtonEvent event\) \{[\s\S]*?if \(httpOtaSafet
 Assert-Match 'if \(cmd == "reset" && !httpOtaInProgress && !httpOtaSucceeded\)' 'Web reset clears only a terminal failed OTA lock'
 
 $PythonUploader = Get-Content (Join-Path $PSScriptRoot '..\scripts\ota_upload.py') -Raw
-if ($PythonUploader -notmatch 'headers=\{[\s\S]*?"X-Session-Token": token') { throw 'FAIL: Python OTA uploader must send X-Session-Token' }
-if ($PythonUploader -notmatch 'add_argument\("--token", required=True') { throw 'FAIL: Python OTA uploader must require --token' }
+if ($PythonUploader -notmatch 'headers=\{[\s\S]*?"X-OTA-Password": password') { throw 'FAIL: Python OTA uploader must send X-OTA-Password' }
+if ($PythonUploader -notmatch 'add_argument\("--password", required=True') { throw 'FAIL: Python OTA uploader must require --password' }
 $PowerShellUploader = Get-Content (Join-Path $PSScriptRoot '..\scripts\ota_upload.ps1') -Raw
-if ($PowerShellUploader -notmatch '\[Parameter\(Mandatory=\$true\)\][\s\S]*?\[string\]\$Token') { throw 'FAIL: PowerShell OTA uploader must require -Token' }
-if ($PowerShellUploader -notmatch 'TryAddWithoutValidation\("X-Session-Token",\s*\$Token\)') { throw 'FAIL: PowerShell OTA uploader must send X-Session-Token' }
+if ($PowerShellUploader -notmatch '\[Parameter\(Mandatory=\$true\)\][\s\S]*?\[string\]\$Password') { throw 'FAIL: PowerShell OTA uploader must require -Password' }
+if ($PowerShellUploader -notmatch 'TryAddWithoutValidation\("X-OTA-Password",\s*\$Password\)') { throw 'FAIL: PowerShell OTA uploader must send X-OTA-Password' }
 if ($PowerShellUploader -notmatch 'MultipartFormDataContent' -or $PowerShellUploader -notmatch '\.Name\s*=\s*''"file"''') { throw 'FAIL: PowerShell OTA uploader must send multipart file field' }
 
 Assert-Match '#include "run_engine\.h"' 'sketch includes the pure RunEngine boundary'
