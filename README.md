@@ -129,7 +129,7 @@ arduino-cli upload -p COM4 --fqbn UNIHIKER:esp32:k10 ./ph_titrator
 ### 3. Upload (HTTP OTA)
 
 ```bash
-python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
+python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42 --password ADMIN_PASSWORD
 ```
 
 HTTP OTA stops and locks both pumps before flash writing. A successful update restarts into SetupMode and never resumes the interrupted run. After a failed or aborted upload, use the Web Reset control; hardware A/B buttons are not required for recovery.
@@ -215,7 +215,7 @@ scripts/
 
 On first setup, sign in with the unique factory password printed on the device label and choose the administrator password. Keep the label private for Web-only password recovery; recovery stops both pumps, clears active sessions, and returns the instrument to `SetupMode`. Log out on shared computers. Sessions expire after 30 minutes without a successful authenticated write.
 
-All control and settings integrations now use authenticated `POST` requests; legacy `GET` integrations are incompatible. OTA also requires a current session token: `python scripts/ota_upload.py firmware.bin --ip DEVICE_IP --token SESSION_TOKEN` or `.\scripts\ota_upload.ps1 -Bin firmware.bin -Ip DEVICE_IP -Token SESSION_TOKEN`. The helpers send the token in `X-Session-Token` and do not print it.
+All control and settings integrations now use authenticated `POST` requests; legacy `GET` integrations are incompatible. OTA accepts the controller administrator password directly and does not require a logged-in session: `python scripts/ota_upload.py firmware.bin --ip DEVICE_IP --password ADMIN_PASSWORD` or `.\scripts\ota_upload.ps1 -Bin firmware.bin -Ip DEVICE_IP -Password ADMIN_PASSWORD`. The helpers send the password in `X-OTA-Password` and do not print it. Five failed password attempts lock login and OTA authentication for 60 seconds.
 
 Manufacturing must run `generate_factory_auth.py` once per device, compile its generated header into that device only, attach the matching label, and delete both generated artifacts after the build. Never reuse or commit credentials or labels.
 

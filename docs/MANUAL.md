@@ -335,7 +335,7 @@ Endpoint hold uses fresh sensor readings. Entering the endpoint range stops dosi
 After compiling, upload the binary over the network:
 
 ```bash
-python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
+python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42 --password ADMIN_PASSWORD
 ```
 
 The device restarts automatically when the upload completes.
@@ -421,7 +421,7 @@ The project uses a custom 16 MB partition table (`partitions.csv`) with dual OTA
 
 The first administrator signs in with the device-specific factory password on the private label and sets an administrator password. Logout invalidates the current session; otherwise it expires after 30 minutes without a successful authenticated write. Forgotten passwords can only be recovered in the Web interface using the factory label. Recovery stops both pumps, clears sessions and run data, and enters `SetupMode`.
 
-Control, settings, recovery, logout, and OTA are authenticated POST-only operations, so legacy GET-based integrations must migrate. Supply the logged-in session token to OTA with `--token` (Python) or `-Token` (PowerShell); it is sent as `X-Session-Token` and must never be logged.
+Control, settings, recovery, and logout remain session-authenticated POST-only operations, so legacy GET-based integrations must migrate. OTA accepts the controller administrator password directly with `--password` (Python) or `-Password` (PowerShell); it is sent as `X-OTA-Password` and must never be logged. Five failed password attempts lock login and OTA authentication for 60 seconds.
 
 ### Manufacturing and network security
 

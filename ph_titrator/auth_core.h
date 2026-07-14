@@ -48,6 +48,8 @@ public:
   void setFactoryCredential(const AuthCredential &credential);
   bool hasAdministratorCredential() const;
   static bool validAdministratorPassword(const char *password, size_t bytes);
+  AuthResult authenticateAdministrator(const char *password, size_t bytes,
+                                       uint32_t now);
   AuthResult login(const char *password, size_t bytes, uint32_t now,
                    char tokenHex[33]);
   AuthResult validateSession(const char *tokenHex, uint32_t now, uint8_t &slot);

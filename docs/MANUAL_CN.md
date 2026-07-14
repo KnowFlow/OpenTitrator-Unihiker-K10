@@ -337,7 +337,7 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 编译完成后，通过网络上传固件：
 
 ```bash
-python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
+python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42 --password ADMIN_PASSWORD
 ```
 
 上传完成后设备自动重启。
@@ -423,7 +423,7 @@ pH7偏移_mV = 探头mV1 + (7.0 - pH1) × 斜率_mV每pH
 
 首位管理员使用私密设备标签上的专属出厂密码登录，然后设置管理员密码。退出会立即使当前会话失效；否则，30 分钟内没有成功的认证写操作时会话失效。忘记密码只能在网页中用出厂标签恢复。恢复会停止两台泵、清除会话和实验数据并进入 `SetupMode`。
 
-控制、设置、恢复、退出和 OTA 都是带认证且仅限 POST 的操作，旧版 GET 集成必须迁移。OTA 请用 Python 的 `--token` 或 PowerShell 的 `-Token` 传入登录会话令牌；令牌通过 `X-Session-Token` 发送，绝不能写入日志。
+控制、设置、恢复和退出仍是使用会话认证且仅限 POST 的操作，旧版 GET 集成必须迁移。OTA 可直接用 Python 的 `--password` 或 PowerShell 的 `-Password` 传入控制器管理员密码；密码通过 `X-OTA-Password` 发送，绝不能写入日志。连续5次密码错误会锁定登录和 OTA 认证60秒。
 
 ### USB 管理员密码恢复
 

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][string]$Bin,
-    [Parameter(Mandatory=$true)][string]$Token,
+    [Parameter(Mandatory=$true)][string]$Password,
     [string]$Ip = "192.168.9.42",
     [scriptblock]$Transport
 )
@@ -23,7 +23,7 @@ try {
     $fileContent.Headers.ContentDisposition = $disposition
     $multipart.Add($fileContent)
     $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, $uri)
-    [void]$request.Headers.TryAddWithoutValidation("X-Session-Token", $Token)
+    [void]$request.Headers.TryAddWithoutValidation("X-OTA-Password", $Password)
     $request.Content = $multipart
     if ($Transport) {
         $result = & $Transport $request

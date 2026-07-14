@@ -116,7 +116,7 @@ arduino-cli upload -p COM4 --fqbn UNIHIKER:esp32:k10 ./ph_titrator
 ### 3. 上传（HTTP OTA）
 
 ```bash
-python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42
+python scripts/ota_upload.py ph_titrator/build/ph_titrator.ino.bin --ip 192.168.9.42 --password ADMIN_PASSWORD
 ```
 
 HTTP OTA 在写入固件前会停止并锁定两路泵。更新成功后设备重启进入 SetupMode，不会恢复中断的实验；上传失败或中止后，请使用网页 Reset 复位，无需依赖 A/B 实体按键。
@@ -177,7 +177,7 @@ scripts/
 
 首次设置时，用设备标签上的唯一出厂密码登录并设置管理员密码。标签应保密，仅用于网页密码恢复；恢复会停止两台泵、清除所有会话并返回 `SetupMode`。共用电脑使用后请退出。若 30 分钟内没有成功的认证写操作，会话自动失效。
 
-控制和设置接口现在仅接受带认证的 `POST`；旧版 `GET` 集成不兼容。OTA 同样需要当前会话令牌：`python scripts/ota_upload.py firmware.bin --ip DEVICE_IP --token SESSION_TOKEN` 或 `.\scripts\ota_upload.ps1 -Bin firmware.bin -Ip DEVICE_IP -Token SESSION_TOKEN`。脚本通过 `X-Session-Token` 请求头发送令牌且不会打印令牌。
+控制和设置接口现在仅接受带认证的 `POST`；旧版 `GET` 集成不兼容。OTA 可直接输入控制器管理员密码，无需先登录或获取会话令牌：`python scripts/ota_upload.py firmware.bin --ip DEVICE_IP --password ADMIN_PASSWORD` 或 `.\scripts\ota_upload.ps1 -Bin firmware.bin -Ip DEVICE_IP -Password ADMIN_PASSWORD`。脚本通过 `X-OTA-Password` 请求头发送密码且不会打印密码；连续5次密码错误会锁定登录和 OTA 认证60秒。
 
 生产时必须为每台设备单独运行 `generate_factory_auth.py`，只把对应生成头文件编译进该设备，贴上匹配标签，构建后删除两个生成文件。不得复用或提交凭据和标签。
 

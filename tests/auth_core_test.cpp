@@ -85,6 +85,17 @@ static void testLoginLockout() {
                    token) == AuthResult::Ok);
 }
 
+static void testDirectAdministratorAuthentication() {
+  FakeCrypto crypto;
+  AuthManager auth(crypto);
+  auth.setAdministratorCredential(credential(crypto, "correct-password"));
+  CHECK(auth.authenticateAdministrator("wrong-password", 14, 10) == AuthResult::Failed);
+  CHECK(auth.authenticateAdministrator("correct-password", 16, 11) == AuthResult::Ok);
+  uint8_t slot = 0;
+  CHECK(auth.validateSession("00000000000000000000000000000000", 12, slot) ==
+        AuthResult::Required);
+}
+
 static void testSessionsAndExpiry() {
   FakeCrypto crypto;
   AuthManager auth(crypto);
@@ -245,6 +256,7 @@ static void testLruSerialWrapPreservesRecency() {
 int main() {
   testPasswordLimitsAndVerification();
   testLoginLockout();
+  testDirectAdministratorAuthentication();
   testSessionsAndExpiry();
   testMalformedTokens();
   testRecovery();
