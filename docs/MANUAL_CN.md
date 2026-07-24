@@ -28,7 +28,7 @@
 ## 1. 安全警告
 
 - **化学品安全**：操作酸、碱或未知样品时，务必佩戴护目镜和防护手套。
-- **电气安全**：K10 逻辑电路为 3.3 V，蠕动泵需外部 12 V 供电。**严禁**直接从 K10 板载电源驱动泵。
+- **电气安全**：K10 逻辑电路为 3.3 V，蠕动泵必须使用与具体型号匹配的外置稳压电源；DFRobot `DFR0523` 要求 5–6 V。**严禁**直接从 K10 板载电源驱动泵。
 - **共地要求**：外部泵电源**必须与 K10 共地**，否则 PWM 信号会浮动，导致泵运行异常。
 - **紧急停止**：任何时候长按 **A+B** 约 1.2 秒即可触发紧急停止，两路泵立即停止。
 
@@ -36,13 +36,16 @@
 
 ## 2. 包装清单
 
-- UNIHIKER K10 主板
-- ADS1115 16 位 ADC 模块（pH 探头接口）
-- pH 探头（BNC 接口，通过转接板接 ADS1115 A0）
-- DFRobot KIT0176 I2C 电子秤模块 + 称重传感器 + 反应瓶支架
-- 2× 蠕动泵及舵机插头（滴定泵 & 样品泵）
-- 泵专用外部 12 V 电源
-- 杜邦线（I2C、电源、PWM）
+完整采购清单见[物料清单](BOM_CN.md)，其中包含数量、DFRobot 官方链接和 SKU。
+
+| 数量 | 物料 | DFRobot SKU |
+|---:|---|---|
+| 1 | [UNIHIKER K10](https://www.dfrobot.com/product-2904.html) | `DFR0992-EN` |
+| 1 | [Gravity ADS1115 16-Bit ADC Module](https://www.dfrobot.com/product-1730.html) | `DFR0553` |
+| 1 | [Gravity I2C 1 kg Weight Sensor Kit](https://www.dfrobot.com/product-2289.html) | `KIT0176` |
+| 2 | [Gravity Digital Peristaltic Pump](https://www.dfrobot.com/product-1698.html) | `DFR0523` |
+| 各 1 | pH 电极/前端、反应容器、K10 USB-C 电源和外置 5–6 V 泵电源 | — |
+| 按需 | 软管、接头、线材、缓冲液、滴定剂和个人防护用品 | — |
 
 ---
 
@@ -64,7 +67,7 @@ K10 SCL    ──► ADS1115 SCL  ──► 秤 SCL
 ### 3.3 蠕动泵
 - **滴定泵**信号线 → `P0`
 - **样品泵**信号线 → `P1`
-- 泵电源（+12 V）由**外部电源**提供，不接 K10。
+- 泵由**外置稳压电源**供电，不接 K10；DFRobot `DFR0523` 使用 5–6 V。
 
 ### 3.4 电子秤
 将反应瓶置于秤盘中央。秤模块地址为 `0x64`。确保称重传感器有轻微预载，空载时能读出稳定的正值。
@@ -258,11 +261,11 @@ pH 稳定后，状态变为 **Running（运行中）**，滴定循环开始。
 
 | 运行 | 校准 | 手动 |
 |-----|------|------|
-| ![中文运行页面](screenshots/web-run-zh.png) | ![中文校准页面](screenshots/web-cal-zh.png) | ![中文手动页面](screenshots/web-manual-zh.png) |
+| ![中文运行页面](screenshots/web-run-cn.png) | ![中文校准页面](screenshots/web-cal-cn.png) | ![中文手动页面](screenshots/web-manual-cn.png) |
 
 | 管理 | 说明 |
 |------|------|
-| ![中文管理页面](screenshots/web-admin-zh.png) | ![中文说明页面](screenshots/web-guide-zh.png) |
+| ![中文管理页面](screenshots/web-admin-cn.png) | ![中文说明页面](screenshots/web-guide-cn.png) |
 
 未登录时仍可只读监控和执行 **Emergency stop（紧急停止）**。开始、暂停、复位、校准、手动运行泵、保存设置或上传固件前必须登录。若 30 分钟内没有成功的认证写操作，会话会过期；命令返回 `Unauthorized` 时请重新登录。
 

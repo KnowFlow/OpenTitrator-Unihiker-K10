@@ -1,6 +1,6 @@
 # K10 pH 滴定仪
 
-[English](README.md) · [使用说明书](docs/MANUAL_CN.md) · [User Manual](docs/MANUAL.md) · [路线图](docs/ROADMAP_CN.md) · [Roadmap](docs/ROADMAP.md)
+[English](README.md) · [物料清单](docs/BOM_CN.md) · [Bill of Materials](docs/BOM.md) · [使用说明书](docs/MANUAL_CN.md) · [User Manual](docs/MANUAL.md) · [路线图](docs/ROADMAP_CN.md) · [Roadmap](docs/ROADMAP.md)
 
 基于 **UNIHIKER K10**（ESP32-S3）的独立 pH 滴定控制器。采用自适应纯脉冲加药策略，配合双路蠕动泵、ADS1115 pH 探头和 I2C 电子秤，实现全自动酸碱滴定。
 
@@ -10,12 +10,14 @@
 
 | 组件 | 接口 | 地址 / 引脚 | 说明 |
 |-----------|-----------|---------------|-------|
-| UNIHIKER K10 | — | — | Arduino core `UNIHIKER:esp32:k10` |
-| ADS1115 ADC | I2C | `0x49` | pH 探头接 A0 |
-| DFRobot KIT0176 电子秤 | I2C | `0x64` | HX711 方案，读取反应瓶重量 |
-| 滴定泵 | 舵机 PWM | `P0` | 蠕动泵（如 DFR0523） |
-| 样品泵 | 舵机 PWM | `P1` | 蠕动泵，用于自动加样品 |
-| 泵电源 | 外部 12 V | — | 与 K10 共地 |
+| [UNIHIKER K10](https://www.dfrobot.com/product-2904.html) | — | — | DFRobot `DFR0992-EN`；Arduino core `UNIHIKER:esp32:k10` |
+| [Gravity ADS1115 ADC](https://www.dfrobot.com/product-1730.html) | I2C | `0x49` | DFRobot `DFR0553`；pH 探头接 A0 |
+| [DFRobot KIT0176 电子秤](https://www.dfrobot.com/product-2289.html) | I2C | `0x64` | DFRobot `KIT0176`；HX711 方案，读取反应瓶重量 |
+| [滴定泵](https://www.dfrobot.com/product-1698.html) | 舵机 PWM | `P0` | DFRobot `DFR0523` 蠕动泵 |
+| [样品泵](https://www.dfrobot.com/product-1698.html) | 舵机 PWM | `P1` | DFRobot `DFR0523` 蠕动泵 |
+| 泵电源 | DFR0523 使用外部 5–6 V | — | 稳压电源，与 K10 共地 |
+
+完整数量、DFRobot 官方 SKU 和采购注意事项见[物料清单](docs/BOM_CN.md)。
 
 ### 接线示意
 
@@ -27,7 +29,7 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           电子秤 (0x64)
 │
 ├─ P0  ──► 滴定泵舵机信号线
 ├─ P1  ──► 样品泵舵机信号线
-└─ 12V/GND ─► 共用地线（泵由外部电源供电）
+└─ 泵 V+/GND ─► 外部稳压电源（DFR0523 使用 5–6 V）
 ```
 
 ---
@@ -47,13 +49,15 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           电子秤 (0x64)
 
 ### 网页截图
 
+以下截图来自设备中文界面，语言选择为“中文”。截图采用独立中文文件名，避免 GitHub 继续显示旧缓存。
+
 | 运行 | 校准 | 手动 |
 |-----|-------------|--------|
-| ![中文运行页面](docs/screenshots/web-run-zh.png) | ![中文校准页面](docs/screenshots/web-cal-zh.png) | ![中文手动页面](docs/screenshots/web-manual-zh.png) |
+| ![中文运行页面](docs/screenshots/web-run-cn.png) | ![中文校准页面](docs/screenshots/web-cal-cn.png) | ![中文手动页面](docs/screenshots/web-manual-cn.png) |
 
 | 管理 | 说明 |
 |-------|-------|
-| ![中文管理页面](docs/screenshots/web-admin-zh.png) | ![中文说明页面](docs/screenshots/web-guide-zh.png) |
+| ![中文管理页面](docs/screenshots/web-admin-cn.png) | ![中文说明页面](docs/screenshots/web-guide-cn.png) |
 
 ### 自适应纯脉冲滴定策略
 控制器不再使用连续 PWM，而是根据当前 pH 与目标值的距离，自动选择**脉冲时长**和**静置等待时间**：

@@ -28,7 +28,7 @@
 ## 1. Safety Warnings
 
 - **Chemical safety**: Always wear goggles and gloves when handling acids, bases, or unknown samples.
-- **Electrical safety**: The K10 logic runs at 3.3 V. The peristaltic pumps require an external 12 V supply. **Never** power the pumps directly from the K10 board.
+- **Electrical safety**: The K10 logic runs at 3.3 V. The pumps require a separate regulated supply matched to the installed model; DFRobot `DFR0523` requires 5–6 V. **Never** power the pumps directly from the K10 board.
 - **Common ground**: The external pump power supply **must share a ground** with the K10, otherwise the PWM signal will float and pumps may behave erratically.
 - **Emergency stop**: Press and hold **A+B** for ~1.2 seconds at any time to trigger an emergency stop. Both pumps will halt immediately.
 
@@ -36,13 +36,16 @@
 
 ## 2. What's in the Box
 
-- UNIHIKER K10 board
-- ADS1115 16-bit ADC module (pH probe interface)
-- pH probe (BNC, connect to ADS1115 A0 via adapter)
-- DFRobot KIT0176 I2C scale module + load cell + reactor vessel holder
-- 2× peristaltic pumps with servo plugs (titrant & sample)
-- External 12 V power supply for pumps
-- Jumper wires (I2C, power, PWM)
+The complete ordering list is maintained in the [Bill of Materials](BOM.md), including quantities, official DFRobot links and SKUs.
+
+| Qty. | Item | DFRobot SKU |
+|---:|---|---|
+| 1 | [UNIHIKER K10](https://www.dfrobot.com/product-2904.html) | `DFR0992-EN` |
+| 1 | [Gravity ADS1115 16-Bit ADC Module](https://www.dfrobot.com/product-1730.html) | `DFR0553` |
+| 1 | [Gravity I2C 1 kg Weight Sensor Kit](https://www.dfrobot.com/product-2289.html) | `KIT0176` |
+| 2 | [Gravity Digital Peristaltic Pump](https://www.dfrobot.com/product-1698.html) | `DFR0523` |
+| 1 each | pH electrode/front end, reaction vessel, K10 USB-C supply and external 5–6 V pump supply | — |
+| As needed | Tubing, fittings, wiring, buffer solutions, titrant and PPE | — |
 
 ---
 
@@ -64,7 +67,7 @@ Plug the pH probe BNC into the ADS1115 A0 channel adapter. The ADS1115 address i
 ### 3.3 Pumps
 - **Titrant pump** signal → `P0`
 - **Sample pump** signal → `P1`
-- Pump power (+12 V) comes from the **external supply**, not the K10.
+- Pump power comes from the **external regulated supply**, not the K10. Use 5–6 V for DFRobot `DFR0523`.
 
 ### 3.4 Scale
 Place the reactor vessel on the scale platform. The scale module address is `0x64`. Make sure the load cell is pre-loaded slightly so it reads a stable positive value when empty.
