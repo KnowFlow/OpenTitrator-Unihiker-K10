@@ -13,9 +13,9 @@ A standalone pH titration controller for the **UNIHIKER K10** (ESP32-S3). It aut
 | [UNIHIKER K10](https://www.dfrobot.com/product-2904.html) | — | — | DFRobot `DFR0992-EN`; Arduino core `UNIHIKER:esp32:k10` |
 | [Gravity ADS1115 ADC](https://www.dfrobot.com/product-1730.html) | I2C | `0x49` | DFRobot `DFR0553`; pH probe on A0 |
 | [DFRobot KIT0176 scale](https://www.dfrobot.com/product-2289.html) | I2C | `0x64` | DFRobot `KIT0176`; HX711-based, reads reactor weight |
-| [Titrant pump](https://www.dfrobot.com/product-1698.html) | Servo PWM | `P0` | DFRobot `DFR0523` peristaltic pump |
-| [Sample pump](https://www.dfrobot.com/product-1698.html) | Servo PWM | `P1` | DFRobot `DFR0523` peristaltic pump |
-| Pump power | External 5–6 V for DFR0523 | — | Regulated supply; common ground with K10 |
+| Titrant pump | Servo PWM | `P0` | Unreleased DFRobot peristaltic pump; SKU and link pending |
+| Sample pump | Servo PWM | `P1` | Unreleased DFRobot peristaltic pump; SKU and link pending |
+| Pump power | External supply | — | Follow the pump engineering specification; common ground with K10 |
 
 See the complete [Bill of Materials](docs/BOM.md) for quantities, official DFRobot SKUs and ordering notes.
 
@@ -29,7 +29,7 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           Scale (0x64)
 │
 ├─ P0  ──► Titrant pump servo signal
 ├─ P1  ──► Sample pump servo signal
-└─ Pump V+/GND ─► External regulated supply (5–6 V for DFR0523)
+└─ Pump V+/GND ─► External regulated supply (follow pump specification)
 ```
 
 ---

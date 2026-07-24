@@ -13,9 +13,9 @@
 | [UNIHIKER K10](https://www.dfrobot.com/product-2904.html) | — | — | DFRobot `DFR0992-EN`；Arduino core `UNIHIKER:esp32:k10` |
 | [Gravity ADS1115 ADC](https://www.dfrobot.com/product-1730.html) | I2C | `0x49` | DFRobot `DFR0553`；pH 探头接 A0 |
 | [DFRobot KIT0176 电子秤](https://www.dfrobot.com/product-2289.html) | I2C | `0x64` | DFRobot `KIT0176`；HX711 方案，读取反应瓶重量 |
-| [滴定泵](https://www.dfrobot.com/product-1698.html) | 舵机 PWM | `P0` | DFRobot `DFR0523` 蠕动泵 |
-| [样品泵](https://www.dfrobot.com/product-1698.html) | 舵机 PWM | `P1` | DFRobot `DFR0523` 蠕动泵 |
-| 泵电源 | DFR0523 使用外部 5–6 V | — | 稳压电源，与 K10 共地 |
+| 滴定泵 | 舵机 PWM | `P0` | DFRobot 未上线新品，SKU 和链接待补充 |
+| 样品泵 | 舵机 PWM | `P1` | DFRobot 未上线新品，SKU 和链接待补充 |
+| 泵电源 | 外部电源 | — | 按蠕动泵工程规格选型，并与 K10 共地 |
 
 完整数量、DFRobot 官方 SKU 和采购注意事项见[物料清单](docs/BOM_CN.md)。
 
@@ -29,7 +29,7 @@ K10 (3.3 V I2C)          ADS1115 (0x49)           电子秤 (0x64)
 │
 ├─ P0  ──► 滴定泵舵机信号线
 ├─ P1  ──► 样品泵舵机信号线
-└─ 泵 V+/GND ─► 外部稳压电源（DFR0523 使用 5–6 V）
+└─ 泵 V+/GND ─► 外部稳压电源（按蠕动泵工程规格选型）
 ```
 
 ---
